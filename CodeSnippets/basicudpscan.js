@@ -67,7 +67,7 @@ function tryUDP(host, port) {
         // UDP-Paket senden
         // Manche Dienste brauchen spezielle Daten,
         // aber ein einfacher Ping reicht oft für einen Scan.
-        const payload = Buffer.from("");
+        const payload = Buffer.from("Test");
 
         s.send(payload, port, host, (err) => {
 
