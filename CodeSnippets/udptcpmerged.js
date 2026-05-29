@@ -1,8 +1,8 @@
-const net   = require("node:net");
-const tls   = require("node:tls");
-const dgram = require("node:dgram");
-const fs    = require("node:fs");
-const path  = require("node:path");
+import net   from "node:net";
+import tls   from "node:tls";
+import dgram from "node:dgram";
+import fs    from "node:fs";
+import path  from "node:path";
 
 /** Maximum number of TCP connections open at the same time per host */
 const MAX_TCP_CONNECTIONS = 50;
@@ -95,7 +95,7 @@ async function scanTCPPort(host, port) {
     const tcpResponse = tlsResponse === null ? await tryTCPConnect(host, port, false) : null;
 
     const response = tlsResponse ?? tcpResponse;
-    return { proto: tlsResponse !== null ? "TLS" : "TCP", port, data: response };
+    return { proto: tlsResponse === null ? "TCP" : "TLS", port, data: response };
 }
 
 // ─── UDP ──────────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ async function scanHost(host, firstPort, lastPort) {
  */
 function expandCIDR(cidr) {
     const [baseIP, prefixLength] = cidr.split("/");
-    const bits = parseInt(prefixLength, 10);
+    const bits = Number.parseInt(prefixLength, 10);
     if (bits < 16 || bits > 32) throw new Error(`CIDR /${bits} not supported (use /16–/32)`);
 
     // Convert the dotted-decimal base IP into a single 32-bit integer
@@ -292,58 +292,52 @@ function parseTargetFile(filePath) {
     return hostList;
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Entry point ──────────────────────────────────────────────────────────────
+// Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]
 
-/**
- * Entry point. Parses CLI arguments, loads the target list, runs the scan,
- * and writes results to a JSON file after each host finishes.
- *
- * Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]
- */
-async function main() {
-    const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
+const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
 
-    if (!targetFile || !firstPortArg || !lastPortArg) {
-        console.error("Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]");
-        console.error("Example: node udptcpmerged.js targets.txt 1 1024 results.json");
-        process.exit(1);
-    }
-
-    const firstPort  = parseInt(firstPortArg, 10);
-    const lastPort   = parseInt(lastPortArg, 10);
-
-    // Default output filename includes a timestamp so runs never overwrite each other
-    const outputPath = outputFile || `scan_${Date.now()}.json`;
-
-    const hostList = parseTargetFile(targetFile);
-    console.log(`Scanning ${hostList.length} host(s), ports ${firstPort}–${lastPort}\n`);
-
-    const scanResults  = [];
-    let hostsCompleted = 0;
-
-    const hostTasks = hostList.map((host) => async () => {
-        const hostResult = await scanHost(host, firstPort, lastPort);
-
-        // Only store hosts that have at least one open port
-        if (hostResult.ports.length > 0) scanResults.push(hostResult);
-
-        hostsCompleted++;
-
-        if (hostResult.ports.length > 0) {
-            // Print a dedicated line for hosts with findings
-            console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${hostResult.ports.length} open`);
-        } else {
-            // Overwrite the same line for quiet hosts to avoid flooding the terminal
-            process.stdout.write(`\r[${hostsCompleted}/${hostList.length}] scanning...`);
-        }
-
-        // Write after every host so partial results survive an early exit
-        fs.writeFileSync(outputPath, JSON.stringify(scanResults, null, 2), "utf8");
-    });
-
-    await runPool(hostTasks, MAX_HOST_WORKERS, () => {});
-
-    console.log(`\nResults saved to ${path.resolve(outputPath)}`);
+if (!targetFile || !firstPortArg || !lastPortArg) {
+    console.error("Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]");
+    console.error("Example: node udptcpmerged.js targets.txt 1 1024 results.json");
+    process.exit(1);
 }
 
-main();
+const firstPort  = Number.parseInt(firstPortArg, 10);
+const lastPort   = Number.parseInt(lastPortArg, 10);
+
+// Default output filename includes a timestamp so runs never overwrite each other
+const outputPath = outputFile || `scan_${Date.now()}.json`;
+
+// Accept either a path to a targets file or a direct host/CIDR string
+const hostList = fs.existsSync(targetFile)
+    ? parseTargetFile(targetFile)
+    : targetFile.includes("/") ? expandCIDR(targetFile) : [targetFile];
+console.log(`Scanning ${hostList.length} host(s), ports ${firstPort}–${lastPort}\n`);
+
+const scanResults  = [];
+let hostsCompleted = 0;
+
+const hostTasks = hostList.map((host) => async () => {
+    const hostResult = await scanHost(host, firstPort, lastPort);
+
+    // Only store hosts that have at least one open port
+    if (hostResult.ports.length > 0) scanResults.push(hostResult);
+
+    hostsCompleted++;
+
+    if (hostResult.ports.length > 0) {
+        // Print a dedicated line for hosts with findings
+        console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${hostResult.ports.length} open`);
+    } else {
+        // Overwrite the same line for quiet hosts to avoid flooding the terminal
+        process.stdout.write(`\r[${hostsCompleted}/${hostList.length}] scanning...`);
+    }
+
+    // Write after every host so partial results survive an early exit
+    fs.writeFileSync(outputPath, JSON.stringify(scanResults, null, 2), "utf8");
+});
+
+await runPool(hostTasks, MAX_HOST_WORKERS, () => {});
+
+console.log(`\nResults saved to ${path.resolve(outputPath)}`);
