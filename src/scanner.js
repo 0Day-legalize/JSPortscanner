@@ -503,8 +503,8 @@ if (process.getuid() !== 0) {
     process.exit(1);
 }
 
-// Default output filename includes a timestamp so runs never overwrite each other
-const outputPath = outputFile || `scan_${Date.now()}.json`;
+// Default output goes to scans/ folder, timestamped so runs never overwrite each other
+const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
 // Accept either a path to a targets file or a direct host/CIDR string
 const hostList = fs.existsSync(targetFile)

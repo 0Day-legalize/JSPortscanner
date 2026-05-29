@@ -1,0 +1,22 @@
+{
+  "name": "rcn-portscanner",
+  "version": "1.0.0",
+  "description": "RCN port scanner — TCP/SYN/UDP/banner with optional Tor routing",
+  "main": "lib/index.js",
+  "type": "commonjs",
+  "bin": {
+    "rcn-scan": "./bin/scan.js"
+  },
+  "scripts": {
+    "start": "node bin/scan.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "socks": "^2.8.3"
+  },
+  "optionalDependencies": {
+    "cap": "^0.2.1",
+    "raw-socket": "^1.7.0"
+  }
+}
