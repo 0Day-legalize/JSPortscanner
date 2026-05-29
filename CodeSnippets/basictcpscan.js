@@ -4,6 +4,9 @@ const net = require("node:net");
 // Import the built-in Node.js module for TLS/SSL encrypted connections (HTTPS)
 const tls = require("node:tls");
 
+// How many ports to scan at the same time
+const CONCURRENCY = 50;
+
 // This function tries to connect to a host:port using either TLS or plain TCP
 // It returns the raw response text, or null if the port is closed/unreachable
 function tryConnect(host, port, useTLS) {
@@ -51,39 +54,50 @@ function tryConnect(host, port, useTLS) {
     });
 }
 
-// Scans a range of ports on the given host and prints any that are open
+// Scans a single port — tries TLS first, falls back to plain TCP
+async function scanPort(host, port) {
+    const tlsData = await tryConnect(host, port, true);
+    const tcpData = tlsData === null ? await tryConnect(host, port, false) : null;
+    const data = tlsData ?? tcpData;
+    return { port, data, isTLS: tlsData !== null };
+}
+
+// Scans a range of ports in parallel batches and prints any that are open
 async function scan(host, start, end) {
 
-    // Loop through every port in the range one at a time
-    for (let port = start; port <= end; port++) {
+    // Build a list of every port number in the range
+    const ports = [];
+    for (let p = start; p <= end; p++) ports.push(p);
 
-        // Print a live progress indicator on the same line (gets overwritten each loop)
-        process.stdout.write(`\rScanning port ${port}...`);
+    // Process ports in chunks of CONCURRENCY size so we don't open too many sockets at once
+    for (let i = 0; i < ports.length; i += CONCURRENCY) {
 
-        // Try TLS first — this works for HTTPS and other encrypted services
-        const tlsData = await tryConnect(host, port, true);
+        // Grab the next batch of ports
+        const batch = ports.slice(i, i + CONCURRENCY);
 
-        // If TLS failed (null), try a plain TCP connection instead
-        const tcpData = tlsData === null ? await tryConnect(host, port, false) : null;
+        // Show progress — which batch we are on out of the total
+        process.stdout.write(`\rScanning ports ${batch[0]}–${batch[batch.length - 1]}...`);
 
-        // Use whichever connection succeeded (?? means "use right side if left is null")
-        const data = tlsData ?? tcpData;
+        // Scan all ports in this batch at the same time
+        const results = await Promise.all(batch.map((p) => scanPort(host, p)));
 
-        // If we got a response, the port is open
-        if (data !== null) {
+        // Loop through results and print any open ports
+        for (const { port, data, isTLS } of results) {
+            if (data !== null) {
 
-            // \r moves cursor to start of line, \x1b[K clears to end — erases the "Scanning..." text
-            process.stdout.write("\r\x1b[K");
+                // \r moves cursor to start of line, \x1b[K clears to end — erases the "Scanning..." text
+                process.stdout.write("\r\x1b[K");
 
-            // Print the open port and whether it used TLS or plain TCP
-            console.log(`\nOPEN ${host}:${port} [${tlsData !== null ? "TLS" : "TCP"}]`);
+                // Print the open port and whether it used TLS or plain TCP
+                console.log(`\nOPEN ${host}:${port} [${isTLS ? "TLS" : "TCP"}]`);
 
-            // If the server sent back any text, print it raw
-            if (data.trim()) console.log(data);
+                // If the server sent back any text, print it raw
+                if (data.trim()) console.log(data);
+            }
         }
     }
 
-    // Clear the last "Scanning port X..." line from the terminal
+    // Clear the last progress line from the terminal
     process.stdout.write("\r\x1b[K");
 
     // Let the user know the scan has finished
