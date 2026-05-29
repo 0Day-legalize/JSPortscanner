@@ -45,8 +45,8 @@ const DECOY_COUNT = 4;
 // ================================================================
 
 /**
- * Waits for a random number of milliseconds between JITTER_MIN_MS and JITTER_MAX_MS.
- * Breaks up the uniform timing pattern that IDS systems use to fingerprint scanners.
+ * Inserts a random inter-probe delay to break the uniform timing signature
+ * that IDS systems use to identify automated scanners.
  *
  * @returns {Promise<void>}
  */
@@ -60,15 +60,9 @@ function jitter() {
 // ================================================================
 
 /**
- * Returns a random IP address from one of the three RFC1918 private ranges.
- * Private IPs are non-routable on the internet so they can never be traced
- * back to a real machine, and confuse defenders into thinking traffic came
- * from inside their own network.
- *
- * Ranges:
- *   10.0.0.0/8       (16 million addresses)
- *   172.16.0.0/12    (1 million addresses)
- *   192.168.0.0/16   (65k addresses)
+ * Returns a random RFC1918 private IP address.
+ * Private addresses are non-routable, so decoy packets appear to originate
+ * from inside the target's own network and can never be traced to us.
  *
  * @returns {string} Dotted-decimal private IP string
  */
@@ -81,8 +75,7 @@ function randomPrivateIP() {
 }
 
 /**
- * Calculates the one's complement checksum used in IP and TCP headers.
- * Sums all 16-bit words in the buffer and folds the carry bits back in.
+ * Calculates the one's complement checksum required by IP and TCP headers (RFC 791 §3.1).
  *
  * @param {Buffer} buf - Raw bytes to checksum
  * @returns {number} 16-bit checksum value
@@ -98,13 +91,12 @@ function oneComplementChecksum(buf) {
 
 /**
  * Builds a raw IP + TCP SYN packet with a spoofed source IP.
- * The packet is 40 bytes: 20 byte IP header + 20 byte TCP header, no payload.
  *
  * @param {string} srcIP   - Spoofed source IP address (private range)
  * @param {string} dstIP   - Real destination IP address
- * @param {number} srcPort - Random source port
+ * @param {number} srcPort - Source port written into the TCP header
  * @param {number} dstPort - Target destination port
- * @returns {Buffer} Complete raw packet ready to send
+ * @returns {Buffer} 40-byte packet (20-byte IP header + 20-byte TCP header) ready to send
  */
 function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
     const packet = Buffer.alloc(40);
@@ -151,10 +143,11 @@ function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
 let rawSocket = null;
 
 /**
- * Returns the shared raw socket, creating it on first call.
- * Returns null if raw-socket is unavailable or process lacks root.
+ * Returns the shared raw socket, creating it lazily on first call.
+ * A single socket is reused across all decoy sends to avoid per-packet
+ * open/close overhead and kernel resource churn.
  *
- * @returns {object|null}
+ * @returns {object|null} Raw socket instance, or null if unavailable
  */
 function getDecoySocket() {
     if (rawSocket) return rawSocket;
@@ -232,7 +225,6 @@ function shufflePorts(firstPort, lastPort) {
  */
 function tryTCPConnect(host, port, useTLS) {
     return new Promise((resolve) => {
-        // Open either a plain TCP socket or a TLS-encrypted socket
         const localPort = randomSourcePort();
         const socket = useTLS
             ? tls.connect({ host, port, localPort, rejectUnauthorized: false })
@@ -241,25 +233,21 @@ function tryTCPConnect(host, port, useTLS) {
         let responseData = "";
         let isConnected  = false;
 
-        // Kill the socket if nothing happens within the timeout window
         socket.setTimeout(SOCKET_TIMEOUT_MS);
 
-        // Once connected, send a minimal HTTP request to provoke a banner response
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             isConnected = true;
             socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: Team Dangerous\r\nConnection: close\r\n\r\n");
         });
 
-        // Collect any data the server sends back
         socket.on("data",    (chunk) => { responseData += chunk.toString("utf8"); });
 
-        // Timeout fired — destroy the socket so the close event triggers
+        // Destroy triggers the close event so the promise always resolves
         socket.on("timeout", ()      => socket.destroy());
 
         // Connection refused or reset before we connected — port is closed
         socket.on("error",   ()      => { if (!isConnected) resolve(null); });
 
-        // Socket fully closed — return whatever we collected (or null if never connected)
         socket.on("close",   ()      => resolve(isConnected ? responseData : null));
     });
 }
@@ -310,7 +298,7 @@ function tryUDPConnect(host, port) {
         const socket   = dgram.createSocket("udp4");
         let isFinished = false;
 
-        // Guard so we only resolve once even if multiple events fire
+        // Multiple events (message + close, or error + close) can fire for one probe
         function finish(result) {
             if (isFinished) return;
             isFinished = true;
@@ -318,10 +306,8 @@ function tryUDPConnect(host, port) {
             resolve(result);
         }
 
-        // No reply within the window — treat as open|filtered
         const timer = setTimeout(() => finish("OPEN|FILTERED"), SOCKET_TIMEOUT_MS);
 
-        // The service sent something back — definitely open
         socket.on("message", (msg) => { clearTimeout(timer); finish(msg.toString("utf8")); });
 
         socket.on("error", (err) => {
@@ -330,7 +316,6 @@ function tryUDPConnect(host, port) {
             finish(err.code === "ECONNREFUSED" ? null : `ERROR: ${err.message}`);
         });
 
-        // Send an empty packet to trigger any response from the service
         const emptyPayload = Buffer.alloc(0);
         socket.send(emptyPayload, port, host, (err) => { if (err) { clearTimeout(timer); finish(null); } });
     });
@@ -365,7 +350,6 @@ async function scanUDPPort(host, port) {
 async function runPool(taskList, workerLimit, onTaskDone) {
     let taskIndex = 0;
 
-    // Each worker loops and grabs the next unstarted task until the list is empty
     async function worker() {
         while (taskIndex < taskList.length) {
             const result = await taskList[taskIndex++]();
@@ -373,7 +357,6 @@ async function runPool(taskList, workerLimit, onTaskDone) {
         }
     }
 
-    // Spawn workerLimit workers (or fewer if the task list is shorter)
     await Promise.all(Array.from({ length: Math.min(workerLimit, taskList.length) }, worker));
 }
 
@@ -413,17 +396,15 @@ async function scanHost(host, firstPort, lastPort) {
         const isOpen = data !== null && data !== "OPEN|FILTERED";
         if (!isOpen) return;
 
-        // First line of the response is the most useful part of a banner
         const banner = typeof data === "string" && data.trim() ? data.trim().split(/\r?\n/) : null;
 
-        // Clear the scanning progress line then print the hit on its own line
+        // \r\x1b[K erases the rolling progress line before printing the permanent hit line
         process.stdout.write("\r\x1b[K");
         console.log(`  OPEN     ${host}:${port} [${proto}]${banner ? " " + banner[0] : ""}`);
 
         openPorts.push({ port, proto, state: "open", banner });
     }
 
-    // Build one task per port for TCP and one for UDP — jitter + decoys fire before each probe
     const tcpTasks = portList.map((port) => async () => {
         await jitter();
         if (resolvedIP) sendDecoys(resolvedIP, port);
@@ -431,13 +412,11 @@ async function scanHost(host, firstPort, lastPort) {
     });
     const udpTasks = portList.map((port) => async () => { await jitter(); return scanUDPPort(host, port); });
 
-    // Run TCP and UDP pools simultaneously
     await Promise.all([
         runPool(tcpTasks, MAX_TCP_CONNECTIONS, onPortResult),
         runPool(udpTasks, MAX_UDP_CONNECTIONS, onPortResult),
     ]);
 
-    // Sort by port number, then protocol name, for a clean JSON output
     openPorts.sort((a, b) => a.port - b.port || a.proto.localeCompare(b.proto));
 
     return { host, ports: openPorts, scannedAt: new Date().toISOString() };
@@ -470,7 +449,6 @@ function expandCIDR(cidr) {
 
     for (let offset = 1; offset < hostCount - 1; offset++) {
         const ipInt = (baseInt + offset) >>> 0;
-        // Convert 32-bit integer back to dotted-decimal
         hostList.push(`${ipInt >>> 24}.${(ipInt >>> 16) & 0xff}.${(ipInt >>> 8) & 0xff}.${ipInt & 0xff}`);
     }
     return hostList;
@@ -492,7 +470,6 @@ function parseTargetFile(filePath) {
         const line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
 
-        // CIDR blocks (contain a "/") get expanded to individual IPs
         if (line.includes("/")) {
             hostList.push(...expandCIDR(line));
         } else {
@@ -511,6 +488,7 @@ if (process.getuid() !== 0) {
     process.exit(1);
 }
 
+// ── CLI argument parsing ──────────────────────────────────────────
 const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
 
 if (!targetFile || !firstPortArg || !lastPortArg) {
@@ -522,10 +500,10 @@ if (!targetFile || !firstPortArg || !lastPortArg) {
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
 
-// Default output goes to scans/ folder, timestamped so runs never overwrite each other
+// Timestamp in the default filename ensures concurrent runs never clobber each other
 const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
-// Accept either a path to a targets file or a direct host/CIDR string
+// ── Target resolution ─────────────────────────────────────────────
 const hostList = fs.existsSync(targetFile)
     ? parseTargetFile(targetFile)
     : targetFile.includes("/") ? expandCIDR(targetFile) : [targetFile];
@@ -538,20 +516,18 @@ let hostsCompleted = 0;
 const hostTasks = hostList.map((host) => async () => {
     const hostResult = await scanHost(host, firstPort, lastPort);
 
-    // Only store hosts that have at least one open port
     if (hostResult.ports.length > 0) scanResults.push(hostResult);
 
     hostsCompleted++;
 
     if (hostResult.ports.length > 0) {
-        // Print a dedicated line for hosts with findings
         console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${hostResult.ports.length} open`);
     } else {
-        // Overwrite the same line for quiet hosts to avoid flooding the terminal
+        // Reuse one terminal line for quiet hosts so the output isn't flooded
         process.stdout.write(`\r[${hostsCompleted}/${hostList.length}] scanning...`);
     }
 
-    // Write after every host so partial results survive an early exit
+    // Flush after every host so partial results survive a SIGINT or crash
     fs.writeFileSync(outputPath, JSON.stringify(scanResults, null, 2), "utf8");
 });
 
