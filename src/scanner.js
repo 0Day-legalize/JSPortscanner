@@ -225,10 +225,9 @@ function shufflePorts(firstPort, lastPort) {
  */
 function tryTCPConnect(host, port, useTLS) {
     return new Promise((resolve) => {
-        const localPort = randomSourcePort();
         const socket = useTLS
-            ? tls.connect({ host, port, localPort, rejectUnauthorized: false })
-            : net.createConnection({ host, port, localPort });
+            ? tls.connect({ host, port, rejectUnauthorized: false })
+            : net.createConnection({ host, port });
 
         let responseData = "";
         let isConnected  = false;
@@ -402,7 +401,8 @@ async function scanHost(host, firstPort, lastPort) {
         process.stdout.write("\r\x1b[K");
         console.log(`  OPEN     ${host}:${port} [${proto}]${banner ? " " + banner[0] : ""}`);
 
-        openPorts.push({ port, proto, state: "open", banner });
+        const portValue = banner ? `${proto}: ${banner[0]}` : proto;
+        openPorts.push({ port, value: portValue });
     }
 
     const tcpTasks = portList.map((port) => async () => {
@@ -417,9 +417,12 @@ async function scanHost(host, firstPort, lastPort) {
         runPool(udpTasks, MAX_UDP_CONNECTIONS, onPortResult),
     ]);
 
-    openPorts.sort((a, b) => a.port - b.port || a.proto.localeCompare(b.proto));
+    openPorts.sort((a, b) => a.port - b.port);
 
-    return { host, ports: openPorts, scannedAt: new Date().toISOString() };
+    const ports = {};
+    for (const { port, value } of openPorts) ports[port] = value;
+
+    return { host, ports, scannedAt: new Date().toISOString() };
 }
 
 // ================================================================
@@ -502,6 +505,9 @@ const lastPort   = Number.parseInt(lastPortArg, 10);
 
 // Timestamp in the default filename ensures concurrent runs never clobber each other
 const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
+
+// Create scans/ folder if it doesn't exist
+fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
 // ── Target resolution ─────────────────────────────────────────────
 const hostList = fs.existsSync(targetFile)
