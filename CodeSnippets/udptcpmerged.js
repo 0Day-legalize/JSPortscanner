@@ -16,30 +16,18 @@ const MAX_HOST_WORKERS = 50;
 /** How long (ms) to wait for a socket response before giving up */
 const SOCKET_TIMEOUT_MS = 2000;
 
-/** Minimum random delay (ms) injected before each port probe */
-const JITTER_MIN_MS = 10;
-
-/** Maximum random delay (ms) injected before each port probe */
-const JITTER_MAX_MS = 250;
-
-// ─── Jitter ───────────────────────────────────────────────────────────────────
-
-/**
- * Waits for a random number of milliseconds between JITTER_MIN_MS and JITTER_MAX_MS.
- * Injecting this before each probe breaks up the uniform timing pattern that IDS
- * systems use to fingerprint port scanners.
- *
- * @returns {Promise<void>}
- */
-function jitter() {
-    const delay = Math.floor(Math.random() * (JITTER_MAX_MS - JITTER_MIN_MS + 1)) + JITTER_MIN_MS;
-    return new Promise((resolve) => setTimeout(resolve, delay));
-}
-
 // ─── TCP / TLS ────────────────────────────────────────────────────────────────
 
-/** Ports that never speak TLS natively — skip the TLS probe and go straight to plain TCP */
-const PLAINTEXT_PORTS = new Set([21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]);
+/**
+ * Returns a random ephemeral source port (1024–65535).
+ * Binding each connection to a different local port breaks the sequential
+ * source-port pattern that IDS systems use to fingerprint scanners.
+ *
+ * @returns {number} Random port number between 1024 and 65535
+ */
+function randomSourcePort() {
+    return Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024;
+}
 
 /**
  * Builds a port list from firstPort to lastPort then randomly shuffles it
@@ -73,9 +61,10 @@ function shufflePorts(firstPort, lastPort) {
 function tryTCPConnect(host, port, useTLS) {
     return new Promise((resolve) => {
         // Open either a plain TCP socket or a TLS-encrypted socket
+        const localPort = randomSourcePort();
         const socket = useTLS
-            ? tls.connect({ host, port, rejectUnauthorized: false })
-            : net.createConnection({ host, port });
+            ? tls.connect({ host, port, localPort, rejectUnauthorized: false })
+            : net.createConnection({ host, port, localPort });
 
         let responseData = "";
         let isConnected  = false;
@@ -86,7 +75,7 @@ function tryTCPConnect(host, port, useTLS) {
         // Once connected, send a minimal HTTP request to provoke a banner response
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             isConnected = true;
-            socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: Team Dangerous\r\nConnection: close\r\n\r\n");
+            socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n");
         });
 
         // Collect any data the server sends back
@@ -112,12 +101,6 @@ function tryTCPConnect(host, port, useTLS) {
  * @returns {Promise<{proto: string, port: number, data: string|null}>}
  */
 async function scanTCPPort(host, port) {
-    // Skip TLS entirely for ports known to speak plaintext
-    if (PLAINTEXT_PORTS.has(port)) {
-        const response = await tryTCPConnect(host, port, false);
-        return { proto: "TCP", port, data: response };
-    }
-
     const tlsResponse = await tryTCPConnect(host, port, true);
 
     // Only try plain TCP if TLS got nothing — avoids a double connection on TLS ports
@@ -248,9 +231,9 @@ async function scanHost(host, firstPort, lastPort) {
         openPorts.push({ port, proto, state: "open", banner });
     }
 
-    // Build one task per port for TCP and one for UDP — jitter fires before each probe
-    const tcpTasks = portList.map((port) => async () => { await jitter(); return scanTCPPort(host, port); });
-    const udpTasks = portList.map((port) => async () => { await jitter(); return scanUDPPort(host, port); });
+    // Build one task per port for TCP and one for UDP
+    const tcpTasks = portList.map((port) => async () => scanTCPPort(host, port));
+    const udpTasks = portList.map((port) => async () => scanUDPPort(host, port));
 
     // Run TCP and UDP pools simultaneously
     await Promise.all([
