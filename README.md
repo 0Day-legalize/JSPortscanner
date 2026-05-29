@@ -127,7 +127,7 @@ JSPortscanner/
 
 ## License
 
-MIT — © 0Day-legalize
+MIT — © Freazer26 + 0Day-legalize
 
 ---
 
