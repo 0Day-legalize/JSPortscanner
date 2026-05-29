@@ -210,11 +210,11 @@ async function scanHost(host, firstPort, lastPort) {
         if (!isOpen) return;
 
         // First line of the response is the most useful part of a banner
-        const banner = typeof data === "string" && data.trim() ? data.trim() : null;
+        const banner = typeof data === "string" && data.trim() ? data.trim().split(/\r?\n/) : null;
 
         // Clear the scanning progress line then print the hit on its own line
         process.stdout.write("\r\x1b[K");
-        console.log(`  OPEN     ${host}:${port} [${proto}]${banner ? " " + banner.split("\n")[0] : ""}`);
+        console.log(`  OPEN     ${host}:${port} [${proto}]${banner ? " " + banner[0] : ""}`);
 
         openPorts.push({ port, proto, state: "open", banner });
     }
