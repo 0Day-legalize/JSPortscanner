@@ -514,6 +514,13 @@ const timestamp =
     `${String(now.getMinutes()).padStart(2, "0")}`;
 
 const outputPath = outputFile || `scan_${timestamp}.json`;
+if (process.getuid() !== 0) {
+    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
+    process.exit(1);
+}
+
+// Default output goes to scans/ folder, timestamped so runs never overwrite each other
+const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
 // Accept either a path to a targets file or a direct host/CIDR string
 const hostList = fs.existsSync(targetFile)
