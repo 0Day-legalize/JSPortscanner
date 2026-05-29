@@ -522,12 +522,13 @@ let hostsCompleted = 0;
 const hostTasks = hostList.map((host) => async () => {
     const hostResult = await scanHost(host, firstPort, lastPort);
 
-    if (hostResult.ports.length > 0) scanResults.push(hostResult);
+    const portCount = Object.keys(hostResult.ports).length;
+    if (portCount > 0) scanResults.push(hostResult);
 
     hostsCompleted++;
 
-    if (hostResult.ports.length > 0) {
-        console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${hostResult.ports.length} open`);
+    if (portCount > 0) {
+        console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${portCount} open`);
     } else {
         // Reuse one terminal line for quiet hosts so the output isn't flooded
         process.stdout.write(`\r[${hostsCompleted}/${hostList.length}] scanning...`);
