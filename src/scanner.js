@@ -1,8 +1,16 @@
-import net   from "node:net";
-import tls   from "node:tls";
-import dgram from "node:dgram";
-import fs    from "node:fs";
-import path  from "node:path";
+import net                from "node:net";
+import tls                from "node:tls";
+import dgram              from "node:dgram";
+import fs                 from "node:fs";
+import path               from "node:path";
+import dns                from "node:dns/promises";
+import { createRequire }  from "node:module";
+
+const require = createRequire(import.meta.url);
+
+// raw-socket requires root — load it optionally so the scanner still works without it
+let raw = null;
+try { raw = require("raw-socket"); } catch { /* no root or package not installed */ }
 
 /** Maximum number of TCP connections open at the same time per host */
 const MAX_TCP_CONNECTIONS = 50;
@@ -15,6 +23,160 @@ const MAX_HOST_WORKERS = 50;
 
 /** How long (ms) to wait for a socket response before giving up */
 const SOCKET_TIMEOUT_MS = 2000;
+
+/** Minimum random delay (ms) injected before each port probe */
+const JITTER_MIN_MS = 10;
+
+/** Maximum random delay (ms) injected before each port probe */
+const JITTER_MAX_MS = 250;
+
+/** Ports that never speak TLS natively — skip the TLS probe and go straight to plain TCP */
+const PLAINTEXT_PORTS = new Set([21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]);
+
+/** Number of spoofed decoy SYN packets sent before each real TCP probe */
+const DECOY_COUNT = 4;
+
+// ─── Jitter ───────────────────────────────────────────────────────────────────
+
+/**
+ * Waits for a random number of milliseconds between JITTER_MIN_MS and JITTER_MAX_MS.
+ * Breaks up the uniform timing pattern that IDS systems use to fingerprint scanners.
+ *
+ * @returns {Promise<void>}
+ */
+function jitter() {
+    const delay = Math.floor(Math.random() * (JITTER_MAX_MS - JITTER_MIN_MS + 1)) + JITTER_MIN_MS;
+    return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+// ─── Decoy IPs ────────────────────────────────────────────────────────────────
+
+/**
+ * Returns a random IP address from one of the three RFC1918 private ranges.
+ * Private IPs are non-routable on the internet so they can never be traced
+ * back to a real machine, and confuse defenders into thinking traffic came
+ * from inside their own network.
+ *
+ * Ranges:
+ *   10.0.0.0/8       (16 million addresses)
+ *   172.16.0.0/12    (1 million addresses)
+ *   192.168.0.0/16   (65k addresses)
+ *
+ * @returns {string} Dotted-decimal private IP string
+ */
+function randomPrivateIP() {
+    const rand  = (n) => Math.floor(Math.random() * n);
+    const pick  = rand(3);
+    if (pick === 0) return `10.${rand(256)}.${rand(256)}.${1 + rand(253)}`;
+    if (pick === 1) return `172.${16 + rand(16)}.${rand(256)}.${1 + rand(253)}`;
+    return `192.168.${rand(256)}.${1 + rand(253)}`;
+}
+
+/**
+ * Calculates the one's complement checksum used in IP and TCP headers.
+ * Sums all 16-bit words in the buffer and folds the carry bits back in.
+ *
+ * @param {Buffer} buf - Raw bytes to checksum
+ * @returns {number} 16-bit checksum value
+ */
+function oneComplementChecksum(buf) {
+    let sum = 0;
+    for (let i = 0; i < buf.length; i += 2) {
+        sum += (i + 1 < buf.length) ? buf.readUInt16BE(i) : (buf[i] << 8);
+    }
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return (~sum) & 0xffff;
+}
+
+/**
+ * Builds a raw IP + TCP SYN packet with a spoofed source IP.
+ * The packet is 40 bytes: 20 byte IP header + 20 byte TCP header, no payload.
+ *
+ * @param {string} srcIP   - Spoofed source IP address (private range)
+ * @param {string} dstIP   - Real destination IP address
+ * @param {number} srcPort - Random source port
+ * @param {number} dstPort - Target destination port
+ * @returns {Buffer} Complete raw packet ready to send
+ */
+function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
+    const packet = Buffer.alloc(40);
+    const src    = srcIP.split(".").map(Number);
+    const dst    = dstIP.split(".").map(Number);
+
+    // ── IP header (bytes 0–19) ────────────────────────────────────────────────
+    packet[0] = 0x45;                                                // version=4, IHL=5
+    packet[1] = 0x00;                                                // DSCP/ECN
+    packet.writeUInt16BE(40, 2);                                     // total length
+    packet.writeUInt16BE(Math.floor(Math.random() * 0xffff), 4);    // random ID
+    packet.writeUInt16BE(0x4000, 6);                                 // DF flag, no fragment
+    packet[8]  = 64 + Math.floor(Math.random() * 64);               // TTL 64–127
+    packet[9]  = 6;                                                  // protocol = TCP
+    packet.writeUInt16BE(0, 10);                                     // checksum placeholder
+    packet[12] = src[0]; packet[13] = src[1]; packet[14] = src[2]; packet[15] = src[3];
+    packet[16] = dst[0]; packet[17] = dst[1]; packet[18] = dst[2]; packet[19] = dst[3];
+    packet.writeUInt16BE(oneComplementChecksum(packet.slice(0, 20)), 10); // IP checksum
+
+    // ── TCP header (bytes 20–39) ──────────────────────────────────────────────
+    packet.writeUInt16BE(srcPort, 20);                               // source port
+    packet.writeUInt16BE(dstPort, 22);                               // dest port
+    packet.writeUInt32BE(Math.floor(Math.random() * 0xffffffff) >>> 0, 24); // random seq
+    packet.writeUInt32BE(0, 28);                                     // ack = 0
+    packet[32] = 0x50;                                               // data offset = 5
+    packet[33] = 0x02;                                               // SYN flag
+    packet.writeUInt16BE(Math.floor(Math.random() * 0xffff) | 0x1000, 34); // window size
+    packet.writeUInt16BE(0, 36);                                     // checksum placeholder
+    packet.writeUInt16BE(0, 38);                                     // urgent pointer
+
+    // TCP checksum needs a pseudo-header: src + dst + 0x00 + proto(6) + tcp_len(20)
+    const pseudo = Buffer.alloc(12);
+    pseudo[0] = src[0]; pseudo[1] = src[1]; pseudo[2] = src[2]; pseudo[3] = src[3];
+    pseudo[4] = dst[0]; pseudo[5] = dst[1]; pseudo[6] = dst[2]; pseudo[7] = dst[3];
+    pseudo[8]  = 0;
+    pseudo[9]  = 6;
+    pseudo.writeUInt16BE(20, 10);
+    packet.writeUInt16BE(oneComplementChecksum(Buffer.concat([pseudo, packet.slice(20)])), 36);
+
+    return packet;
+}
+
+/** Lazily created raw socket — reused across all decoy sends */
+let rawSocket = null;
+
+/**
+ * Returns the shared raw socket, creating it on first call.
+ * Returns null if raw-socket is unavailable or process lacks root.
+ *
+ * @returns {object|null}
+ */
+function getDecoySocket() {
+    if (rawSocket) return rawSocket;
+    if (!raw) return null;
+    try {
+        rawSocket = raw.createSocket({ protocol: raw.Protocol.None, addressFamily: raw.AddressFamily.IPv4 });
+        // IP_HDRINCL tells the kernel we are providing the full IP header ourselves
+        rawSocket.setOption(raw.SocketLevel.IPPROTO_IP, raw.SocketOption.IP_HDRINCL, Buffer.from([1, 0, 0, 0]), 4);
+        return rawSocket;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Fires DECOY_COUNT spoofed TCP SYN packets at dstIP:dstPort, each from a
+ * random private source IP, before the real probe goes out.
+ * Silently does nothing if raw-socket is unavailable or process is not root.
+ *
+ * @param {string} dstIP   - Resolved destination IP
+ * @param {number} dstPort - Target port
+ */
+function sendDecoys(dstIP, dstPort) {
+    const sock = getDecoySocket();
+    if (!sock) return;
+    for (let i = 0; i < DECOY_COUNT; i++) {
+        const packet = buildSynPacket(randomPrivateIP(), dstIP, randomSourcePort(), dstPort);
+        sock.send(packet, 0, packet.length, dstIP, () => {});
+    }
+}
 
 // ─── TCP / TLS ────────────────────────────────────────────────────────────────
 
@@ -75,7 +237,7 @@ function tryTCPConnect(host, port, useTLS) {
         // Once connected, send a minimal HTTP request to provoke a banner response
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             isConnected = true;
-            socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n");
+            socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: Team Dangerous\r\nConnection: close\r\n\r\n");
         });
 
         // Collect any data the server sends back
@@ -101,6 +263,12 @@ function tryTCPConnect(host, port, useTLS) {
  * @returns {Promise<{proto: string, port: number, data: string|null}>}
  */
 async function scanTCPPort(host, port) {
+    // Skip TLS entirely for ports known to speak plaintext
+    if (PLAINTEXT_PORTS.has(port)) {
+        const response = await tryTCPConnect(host, port, false);
+        return { proto: "TCP", port, data: response };
+    }
+
     const tlsResponse = await tryTCPConnect(host, port, true);
 
     // Only try plain TCP if TLS got nothing — avoids a double connection on TLS ports
@@ -211,6 +379,14 @@ async function scanHost(host, firstPort, lastPort) {
     const portList  = shufflePorts(firstPort, lastPort);
     const openPorts = [];
 
+    // Resolve hostname to IP once — raw socket needs a dotted-decimal address
+    let resolvedIP = null;
+    try {
+        resolvedIP = /^\d+\.\d+\.\d+\.\d+$/.test(host)
+            ? host
+            : (await dns.lookup(host)).address;
+    } catch { /* hostname unresolvable — decoys disabled for this host */ }
+
     /**
      * Receives a single port result and keeps it only if the port is open.
      *
@@ -231,9 +407,13 @@ async function scanHost(host, firstPort, lastPort) {
         openPorts.push({ port, proto, state: "open", banner });
     }
 
-    // Build one task per port for TCP and one for UDP
-    const tcpTasks = portList.map((port) => async () => scanTCPPort(host, port));
-    const udpTasks = portList.map((port) => async () => scanUDPPort(host, port));
+    // Build one task per port for TCP and one for UDP — jitter + decoys fire before each probe
+    const tcpTasks = portList.map((port) => async () => {
+        await jitter();
+        if (resolvedIP) sendDecoys(resolvedIP, port);
+        return scanTCPPort(host, port);
+    });
+    const udpTasks = portList.map((port) => async () => { await jitter(); return scanUDPPort(host, port); });
 
     // Run TCP and UDP pools simultaneously
     await Promise.all([
@@ -318,8 +498,13 @@ if (!targetFile || !firstPortArg || !lastPortArg) {
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
 
-// Default output filename includes a timestamp so runs never overwrite each other
-const outputPath = outputFile || `scan_${Date.now()}.json`;
+if (process.getuid() !== 0) {
+    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
+    process.exit(1);
+}
+
+// Default output goes to scans/ folder, timestamped so runs never overwrite each other
+const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
 // Accept either a path to a targets file or a direct host/CIDR string
 const hostList = fs.existsSync(targetFile)
