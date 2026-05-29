@@ -498,6 +498,11 @@ if (!targetFile || !firstPortArg || !lastPortArg) {
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
 
+if (process.getuid() !== 0) {
+    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
+    process.exit(1);
+}
+
 // Default output filename includes a timestamp so runs never overwrite each other
 const outputPath = outputFile || `scan_${Date.now()}.json`;
 
