@@ -12,6 +12,10 @@ const require = createRequire(import.meta.url);
 let raw = null;
 try { raw = require("raw-socket"); } catch { /* no root or package not installed */ }
 
+// ================================================================
+//  CONSTANTS
+// ================================================================
+
 /** Maximum number of TCP connections open at the same time per host */
 const MAX_TCP_CONNECTIONS = 50;
 
@@ -36,7 +40,9 @@ const PLAINTEXT_PORTS = new Set([21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]);
 /** Number of spoofed decoy SYN packets sent before each real TCP probe */
 const DECOY_COUNT = 4;
 
-// ─── Jitter ───────────────────────────────────────────────────────────────────
+// ================================================================
+//  JITTER
+// ================================================================
 
 /**
  * Waits for a random number of milliseconds between JITTER_MIN_MS and JITTER_MAX_MS.
@@ -49,7 +55,9 @@ function jitter() {
     return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
-// ─── Decoy IPs ────────────────────────────────────────────────────────────────
+// ================================================================
+//  DECOY IPs
+// ================================================================
 
 /**
  * Returns a random IP address from one of the three RFC1918 private ranges.
@@ -65,8 +73,8 @@ function jitter() {
  * @returns {string} Dotted-decimal private IP string
  */
 function randomPrivateIP() {
-    const rand  = (n) => Math.floor(Math.random() * n);
-    const pick  = rand(3);
+    const rand = (n) => Math.floor(Math.random() * n);
+    const pick = rand(3);
     if (pick === 0) return `10.${rand(256)}.${rand(256)}.${1 + rand(253)}`;
     if (pick === 1) return `172.${16 + rand(16)}.${rand(256)}.${1 + rand(253)}`;
     return `192.168.${rand(256)}.${1 + rand(253)}`;
@@ -178,7 +186,9 @@ function sendDecoys(dstIP, dstPort) {
     }
 }
 
-// ─── TCP / TLS ────────────────────────────────────────────────────────────────
+// ================================================================
+//  TCP / TLS
+// ================================================================
 
 /**
  * Returns a random ephemeral source port (1024–65535).
@@ -278,7 +288,9 @@ async function scanTCPPort(host, port) {
     return { proto: tlsResponse === null ? "TCP" : "TLS", port, data: response };
 }
 
-// ─── UDP ──────────────────────────────────────────────────────────────────────
+// ================================================================
+//  UDP
+// ================================================================
 
 /**
  * Sends an empty UDP packet to host:port and waits for a response.
@@ -336,7 +348,9 @@ async function scanUDPPort(host, port) {
     return { proto: "UDP", port, data: response };
 }
 
-// ─── Concurrency pool ─────────────────────────────────────────────────────────
+// ================================================================
+//  CONCURRENCY POOL
+// ================================================================
 
 /**
  * Runs an array of async tasks with a cap on how many run at the same time.
@@ -363,7 +377,9 @@ async function runPool(taskList, workerLimit, onTaskDone) {
     await Promise.all(Array.from({ length: Math.min(workerLimit, taskList.length) }, worker));
 }
 
-// ─── Scan one host, return structured results ─────────────────────────────────
+// ================================================================
+//  HOST SCANNER
+// ================================================================
 
 /**
  * Scans all ports in the given range on a single host, running TCP and UDP in parallel.
@@ -427,7 +443,9 @@ async function scanHost(host, firstPort, lastPort) {
     return { host, ports: openPorts, scannedAt: new Date().toISOString() };
 }
 
-// ─── Parse IP list file ───────────────────────────────────────────────────────
+// ================================================================
+//  TARGET PARSING
+// ================================================================
 
 /**
  * Expands a CIDR block (e.g. 192.168.1.0/24) into individual host IP strings.
@@ -484,40 +502,25 @@ function parseTargetFile(filePath) {
     return hostList;
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
-// Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]
+// ================================================================
+//  ENTRY POINT
+// ================================================================
+
+if (process.getuid() !== 0) {
+    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
+    process.exit(1);
+}
 
 const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
 
 if (!targetFile || !firstPortArg || !lastPortArg) {
-    console.error("Usage: node udptcpmerged.js <targets.txt> <start-port> <end-port> [output.json]");
-    console.error("Example: node udptcpmerged.js targets.txt 1 1024 results.json");
+    console.error("Usage: sudo node src/scanner.js <target> <start-port> <end-port> [output.json]");
+    console.error("Example: sudo node src/scanner.js config/targets.txt 1 1024");
     process.exit(1);
 }
 
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
-
-if (process.getuid() !== 0) {
-    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
-    process.exit(1);
-}
-
-// Default output goes to scans/ folder, timestamped so runs never overwrite each other
-const now = new Date();
-
-const timestamp =
-    `${String(now.getDate()).padStart(2, "0")}.` +
-    `${String(now.getMonth() + 1).padStart(2, "0")}.` +
-    `${now.getFullYear()}T` +
-    `${String(now.getHours()).padStart(2, "0")}:` +
-    `${String(now.getMinutes()).padStart(2, "0")}`;
-
-const outputPath = outputFile || `scan_${timestamp}.json`;
-if (process.getuid() !== 0) {
-    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
-    process.exit(1);
-}
 
 // Default output goes to scans/ folder, timestamped so runs never overwrite each other
 const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
@@ -526,6 +529,7 @@ const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 const hostList = fs.existsSync(targetFile)
     ? parseTargetFile(targetFile)
     : targetFile.includes("/") ? expandCIDR(targetFile) : [targetFile];
+
 console.log(`Scanning ${hostList.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
 const scanResults  = [];
