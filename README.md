@@ -128,7 +128,3 @@ JSPortscanner/
 ## License
 
 MIT — © 0Day-legalize
-
----
-
-*Reviewed with [Claude](https://claude.ai)*
