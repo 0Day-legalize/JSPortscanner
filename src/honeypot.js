@@ -1,29 +1,15 @@
 import fs from "node:fs";
 
-// --- known honeypot signatures ---
+const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).honeypot;
 
-// Cowrie ships with hardcoded old OpenSSH banners — real servers don't run these
-const COWRIE_SSH_BANNERS = [
-    "SSH-2.0-OpenSSH_5.3",
-    "SSH-2.0-OpenSSH_5.9p1 Debian-5ubuntu1.4",
-    "SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2",
-    "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.8",
-    "SSH-2.0-OpenSSH_6.7p1 Debian-5+deb8u4",
-    "SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.2",
-];
+const COWRIE_SSH_BANNERS   = cfg.cowrieSSHBanners;
+const TPOT_PORT_COMBO      = new Set(cfg.tpotPortCombo);
+const TPOT_MATCH_MIN       = cfg.tpotMatchMin;
+const TELNET_PORT          = cfg.telnetPort;
+const SUSPICIOUS_THRESHOLD = cfg.suspiciousPortThreshold;
 
-// Real distro-packaged OpenSSH always includes an OS suffix like "Ubuntu-2ubuntu3.2"
-// or "Debian-5+deb11u7". Bare version strings with no suffix are a Cowrie tell.
-const SSH_DISTRO_SUFFIX = /SSH-2\.0-OpenSSH_[\d.p]+\s+(Ubuntu|Debian|RHEL|CentOS|Alpine|FreeBSD)/i;
-
-// T-Pot runs many honeypot services simultaneously — this port combo is a strong signal
-const TPOT_PORT_COMBO = new Set([21, 22, 23, 25, 80, 443, 445]);
-
-// Telnet should not exist on modern production servers
-const TELNET_PORT = 23;
-
-// Ports that legitimate servers rarely expose all at once
-const SUSPICIOUS_THRESHOLD = 6;
+// Real distro-packaged OpenSSH always includes an OS suffix — bare version strings are a Cowrie tell
+const SSH_DISTRO_SUFFIX = new RegExp(`SSH-2\\.0-OpenSSH_[\\d.p]+\\s+(${cfg.sshDistroKeywords.join("|")})`, "i");
 
 // --- detection logic ---
 
@@ -52,7 +38,7 @@ function checkHost(host, ports) {
 
     // check for T-Pot port combination
     const tpotMatches = openPorts.filter(p => TPOT_PORT_COMBO.has(p));
-    if (tpotMatches.length >= 4) {
+    if (tpotMatches.length >= TPOT_MATCH_MIN) {
         reasons.push(`T-Pot port combination detected: ${tpotMatches.join(", ")}`);
     }
 

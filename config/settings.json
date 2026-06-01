@@ -9,6 +9,21 @@
     "decoyCount": 4,
     "plaintextPorts": [21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]
   },
+  "honeypot": {
+    "suspiciousPortThreshold": 6,
+    "telnetPort": 23,
+    "tpotPortCombo": [21, 22, 23, 25, 80, 443, 445],
+    "tpotMatchMin": 4,
+    "cowrieSSHBanners": [
+      "SSH-2.0-OpenSSH_5.3",
+      "SSH-2.0-OpenSSH_5.9p1 Debian-5ubuntu1.4",
+      "SSH-2.0-OpenSSH_6.0p1 Debian-4+deb7u2",
+      "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.8",
+      "SSH-2.0-OpenSSH_6.7p1 Debian-5+deb8u4",
+      "SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.2"
+    ],
+    "sshDistroKeywords": ["Ubuntu", "Debian", "RHEL", "CentOS", "Alpine", "FreeBSD"]
+  },
   "credtest": {
     "concurrency": 3,
     "jitterMinMs": 500,
