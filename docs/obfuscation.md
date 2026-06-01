@@ -282,3 +282,7 @@ Four independent techniques combine here:
 ---
 
 *Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

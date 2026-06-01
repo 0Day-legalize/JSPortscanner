@@ -819,3 +819,7 @@ That host key type is no longer flagged during live KEX probing.
 ---
 
 *Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
