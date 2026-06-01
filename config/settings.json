@@ -21,9 +21,9 @@
     "httpEndpoints": ["/login", "/admin", "/wp-login.php", "/admin/login", "/signin", "/user/login"],
     "httpFields": [
       { "user": "username", "pass": "password" },
-      { "user": "email",    "pass": "password" },
-      { "user": "user",     "pass": "pass"     },
-      { "user": "login",    "pass": "password" }
+      { "user": "email", "pass": "password" },
+      { "user": "user", "pass": "pass" },
+      { "user": "login", "pass": "password" }
     ]
   }
 }
