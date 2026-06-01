@@ -337,21 +337,33 @@ const hosts = resolveTargets(targetFile);
 console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
 const results = [];
-let done = 0;
+let done    = 0;
+let hits    = 0;
+const BAR   = 30;
+
+function renderBar() {
+    const pct      = done / hosts.length;
+    const filled   = Math.floor(pct * BAR);
+    const raccoon  = "🦝";
+    const eaten    = "·".repeat(filled);
+    const remaining = "·".repeat(BAR - filled);
+    const pctStr   = String(Math.floor(pct * 100)).padStart(3, " ");
+    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${done}/${hosts.length}  ${pctStr}%  🔓 ${hits}`);
+}
 
 const tasks = hosts.map((host) => async () => {
     const result = await scanHost(host, firstPort, lastPort);
     const count  = Object.keys(result.ports).length;
 
-    if (count > 0) results.push(result);
+    if (count > 0) { results.push(result); hits += count; }
     done++;
 
     if (count > 0) {
-        console.log(`[${done}/${hosts.length}] ${host} — ${count} open`);
-    } else {
-        process.stdout.write(`\r[${done}/${hosts.length}] scanning...`);
+        process.stdout.write("\r\x1b[K");
+        console.log(`  🔓 ${host} — ${count} open`);
     }
 
+    renderBar();
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
 });
 
