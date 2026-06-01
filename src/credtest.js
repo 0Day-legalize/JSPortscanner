@@ -5,9 +5,7 @@ import { jitter, runPool } from "./utils.js";
 
 const require = createRequire(import.meta.url);
 
-
 // --- ʕ•ᴥ•ʔ optional dependencies ʕ•ᴥ•ʔ ---
-
 
 // Load ssh2 and basic-ftp optionally so missing packages don't crash the tool
 let SSHClient = null;
@@ -18,9 +16,7 @@ try { ({ Client: SSHClient } = require("ssh2")); }  catch { console.warn("[warn]
 try { ftpLib = require("basic-ftp"); }               catch { console.warn("[warn] basic-ftp not installed — FTP testing disabled"); }
 try { ({ default: axios } = await import("axios")); } catch { console.warn("[warn] axios not installed — HTTP testing disabled"); }
 
-
 // --- ʕ•ᴥ•ʔ config ʕ•ᴥ•ʔ ---
-
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).credtest;
 
@@ -35,9 +31,7 @@ const HTTPS_PORTS      = new Set(cfg.httpsPorts);
 const HTTP_ENDPOINTS   = cfg.httpEndpoints;
 const HTTP_FIELDS      = cfg.httpFields;
 
-
 // --- ʕ•ᴥ•ʔ ssh ʕ•ᴥ•ʔ ---
-
 
 /**
  * Attempts SSH login with the given credentials.
@@ -71,9 +65,7 @@ function trySSH(host, port, username, password) {
     });
 }
 
-
 // --- ʕ•ᴥ•ʔ ftp ʕ•ᴥ•ʔ ---
-
 
 /**
  * Attempts FTP login with the given credentials.
@@ -106,9 +98,11 @@ async function tryFTP(host, port, user, password) {
     return false;
 }
 
-
 // --- ʕ•ᴥ•ʔ http ʕ•ᴥ•ʔ ---
 
+// created once and reused across all HTTPS requests
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+const ERROR_KEYWORDS = ["invalid", "incorrect", "failed", "wrong", "error", "denied"];
 
 /**
  * Attempts HTTP/HTTPS form login across common endpoints and field names.
@@ -121,11 +115,6 @@ async function tryFTP(host, port, user, password) {
  * @param {boolean} useHTTPS
  * @returns {Promise<boolean>}
  */
-// created once and reused across all HTTPS requests
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-
-const ERROR_KEYWORDS = ["invalid", "incorrect", "failed", "wrong", "error", "denied"];
-
 async function tryHTTP(host, port, username, password, useHTTPS) {
     if (!axios) return false;
 
@@ -164,9 +153,7 @@ async function tryHTTP(host, port, username, password, useHTTPS) {
     return false;
 }
 
-
 // --- ʕ•ᴥ•ʔ service detection ʕ•ᴥ•ʔ ---
-
 
 /**
  * Determines the service type for a port based on port number and scan proto value.
@@ -185,9 +172,7 @@ function detectService(portNum, portValue) {
     return null;
 }
 
-
 // --- ʕ•ᴥ•ʔ wordlist ʕ•ᴥ•ʔ ---
-
 
 /**
  * Reads a wordlist file and returns credential pairs.
@@ -208,9 +193,7 @@ function parseWordlist(filePath) {
         });
 }
 
-
 // --- ʕ•ᴥ•ʔ host tester ʕ•ᴥ•ʔ ---
-
 
 /**
  * Tests all detected services on a host against the full wordlist.
@@ -233,7 +216,6 @@ async function testHost(host, ports, credentials) {
         console.log(`  Testing ${host}:${portNum} [${service.toUpperCase()}]`);
 
         const abort      = new AbortController();
-        let attemptCount = 0;
         let firstAttempt = true;
 
         const tasks = credentials.map(({ user, pass }) => async () => {
@@ -246,8 +228,6 @@ async function testHost(host, ports, credentials) {
             if (service === "ftp")   success = await tryFTP(host, portNum, user, pass);
             if (service === "http")  success = await tryHTTP(host, portNum, user, pass, false);
             if (service === "https") success = await tryHTTP(host, portNum, user, pass, true);
-
-            attemptCount++;
 
             if (success && !abort.signal.aborted) {
                 abort.abort();
@@ -271,9 +251,7 @@ async function testHost(host, ports, credentials) {
     return { found, honeypot };
 }
 
-
 // --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
-
 
 const args        = process.argv.slice(2);
 const scanFile    = args[0];

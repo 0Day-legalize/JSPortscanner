@@ -16,14 +16,19 @@ try { raw = require("raw-socket"); } catch {}
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).scanner;
 
-const MAX_TCP  = cfg.maxTCPConnections;
-const MAX_UDP  = cfg.maxUDPConnections;
-const MAX_HOST = cfg.maxHostWorkers;
-const TIMEOUT  = cfg.socketTimeoutMs;
-const J_MIN    = cfg.jitterMinMs;
-const J_MAX    = cfg.jitterMaxMs;
-const DECOYS   = cfg.decoyCount;
-const PLAIN    = new Set(cfg.plaintextPorts);
+const MAX_TCP   = cfg.maxTCPConnections;
+const MAX_UDP   = cfg.maxUDPConnections;
+const MAX_HOST  = cfg.maxHostWorkers;
+const TIMEOUT   = cfg.socketTimeoutMs;
+const J_MIN     = cfg.jitterMinMs;
+const J_MAX     = cfg.jitterMaxMs;
+const DECOYS    = cfg.decoyCount;
+const PLAIN     = new Set(cfg.plaintextPorts);
+const UA_LIST   = cfg.userAgents;
+const HTTP_PATHS = cfg.httpPaths;
+
+const randomUA   = () => UA_LIST[rand(UA_LIST.length)];
+const randomPath = () => HTTP_PATHS[rand(HTTP_PATHS.length)];
 
 // --- ʕ•ᴥ•ʔ obfuscation helpers ʕ•ᴥ•ʔ ---
 
@@ -141,11 +146,11 @@ function tryTCPConnect(host, port, useTLS, hostname) {
 
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             connected = true;
-            // banner grab — send HTTP HEAD to provoke a response from web services
+            // banner grab — random UA + path per connection to avoid scanner fingerprinting
             socket.write(
-                `HEAD / HTTP/1.1\r\n` +
+                `HEAD ${randomPath()} HTTP/1.1\r\n` +
                 `Host: ${hostname}\r\n` +
-                `User-Agent: Team Dangerous\r\n` +
+                `User-Agent: ${randomUA()}\r\n` +
                 `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
                 `Accept-Language: en-US,en;q=0.5\r\n` +
                 `Accept-Encoding: gzip, deflate\r\n` +
@@ -309,6 +314,12 @@ if (!targetFile || !firstPortArg || !lastPortArg) {
 
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
+
+if (isNaN(firstPort) || isNaN(lastPort) || firstPort < 1 || lastPort > 65535 || firstPort > lastPort) {
+    console.error("invalid port range — must be 1–65535 with start <= end");
+    process.exit(1);
+}
+
 const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -351,6 +362,13 @@ const tasks = hosts.map((host) => async () => {
     if (count > 0) { results.push(result); hits += count; }
 
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
+});
+
+// flush results on Ctrl+C so partial scans aren't lost
+process.on("SIGINT", () => {
+    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
+    console.log(`\n\ninterrupted — partial results saved to ${path.resolve(outputPath)}`);
+    process.exit(0);
 });
 
 await runPool(tasks, MAX_HOST, () => {});
