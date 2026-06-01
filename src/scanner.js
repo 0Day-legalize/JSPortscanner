@@ -344,11 +344,11 @@ const BAR   = 30;
 function renderBar() {
     const pct      = done / hosts.length;
     const filled   = Math.floor(pct * BAR);
-    const raccoon  = "🦝";
+    const raccoon  = "ʕ•ᴥ•ʔ";
     const eaten    = "·".repeat(filled);
     const remaining = "·".repeat(BAR - filled);
     const pctStr   = String(Math.floor(pct * 100)).padStart(3, " ");
-    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${done}/${hosts.length}  ${pctStr}%  🔓 ${hits}`);
+    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${done}/${hosts.length}  ${pctStr}%  * ${hits}`);
 }
 
 const tasks = hosts.map((host) => async () => {
@@ -360,7 +360,7 @@ const tasks = hosts.map((host) => async () => {
 
     if (count > 0) {
         process.stdout.write("\r\x1b[K");
-        console.log(`  🔓 ${host} — ${count} open`);
+        console.log(`  * ${host} — ${count} open`);
     }
 
     renderBar();
