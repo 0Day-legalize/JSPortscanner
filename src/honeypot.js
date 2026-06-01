@@ -12,8 +12,15 @@ const COWRIE_SSH_BANNERS = [
     "SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.2",
 ];
 
+// Real distro-packaged OpenSSH always includes an OS suffix like "Ubuntu-2ubuntu3.2"
+// or "Debian-5+deb11u7". Bare version strings with no suffix are a Cowrie tell.
+const SSH_DISTRO_SUFFIX = /SSH-2\.0-OpenSSH_[\d.p]+\s+(Ubuntu|Debian|RHEL|CentOS|Alpine|FreeBSD)/i;
+
 // T-Pot runs many honeypot services simultaneously — this port combo is a strong signal
 const TPOT_PORT_COMBO = new Set([21, 22, 23, 25, 80, 443, 445]);
+
+// Telnet should not exist on modern production servers
+const TELNET_PORT = 23;
 
 // Ports that legitimate servers rarely expose all at once
 const SUSPICIOUS_THRESHOLD = 6;
@@ -24,13 +31,23 @@ function checkHost(host, ports) {
     const reasons = [];
     const openPorts = Object.keys(ports).map(Number);
 
-    // check SSH banner against known Cowrie fingerprints
     for (const [port, value] of Object.entries(ports)) {
+        // check SSH banner against known Cowrie fingerprints
         for (const banner of COWRIE_SSH_BANNERS) {
             if (value.includes(banner)) {
                 reasons.push(`Cowrie SSH banner on port ${port}: "${banner}"`);
             }
         }
+
+        // SSH banner with no OS distro suffix — real packages always include one
+        if (value.startsWith("TCP: SSH-2.0-OpenSSH") && !SSH_DISTRO_SUFFIX.test(value)) {
+            reasons.push(`SSH banner missing OS suffix on port ${port} — possible honeypot: "${value.replace("TCP: ", "")}"`);
+        }
+    }
+
+    // Telnet open — not found on legitimate modern servers
+    if (openPorts.includes(TELNET_PORT)) {
+        reasons.push(`Telnet (port 23) open — almost always a honeypot on modern networks`);
     }
 
     // check for T-Pot port combination
