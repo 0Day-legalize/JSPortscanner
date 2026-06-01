@@ -5,6 +5,7 @@ import fs                from "node:fs";
 import path              from "node:path";
 import dns               from "node:dns/promises";
 import { createRequire } from "node:module";
+import { jitter, runPool } from "./utils.js";
 
 const require = createRequire(import.meta.url);
 
@@ -28,10 +29,6 @@ const PLAIN    = new Set(cfg.plaintextPorts);
 
 const rand = (n) => Math.floor(Math.random() * n);
 
-function jitter() {
-    return new Promise(r => setTimeout(r, rand(J_MAX - J_MIN + 1) + J_MIN));
-}
-
 function randomSourcePort() {
     return rand(65535 - 1024 + 1) + 1024;
 }
@@ -43,14 +40,6 @@ function shufflePorts(first, last) {
         [list[i], list[j]] = [list[j], list[i]];
     }
     return list;
-}
-
-async function runPool(tasks, limit, onDone) {
-    let i = 0;
-    const worker = async () => {
-        while (i < tasks.length) onDone(await tasks[i++]());
-    };
-    await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
 }
 
 // --- obfuscation decoy IPs ---
@@ -253,13 +242,13 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
     }
 
     const tcpTasks = portList.map((port) => async () => {
-        await jitter();
+        await jitter(J_MIN, J_MAX);
         if (resolvedIP) sendDecoys(resolvedIP, port);
         return scanTCPPort(host, port, hostname);
     });
 
     const udpTasks = portList.map((port) => async () => {
-        await jitter();
+        await jitter(J_MIN, J_MAX);
         return scanUDPPort(host, port);
     });
 

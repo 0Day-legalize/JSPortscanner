@@ -13,20 +13,22 @@ const SSH_DISTRO_SUFFIX = new RegExp(`SSH-2\\.0-OpenSSH_[\\d.p]+\\s+(${cfg.sshDi
 
 // --- detection logic ---
 
-function checkHost(host, ports) {
+function checkHost(ports) {
     const reasons = [];
     const openPorts = Object.keys(ports).map(Number);
 
     for (const [port, value] of Object.entries(ports)) {
-        // check SSH banner against known Cowrie fingerprints
-        for (const banner of COWRIE_SSH_BANNERS) {
-            if (value.includes(banner)) {
-                reasons.push(`Cowrie SSH banner on port ${port}: "${banner}"`);
-            }
+        const isSSH = value.startsWith("TCP: SSH-2.0-OpenSSH");
+
+        // exact Cowrie banner match takes priority — skip bare-suffix check to avoid double-flagging
+        const cowrieMatch = isSSH && COWRIE_SSH_BANNERS.find(b => value.includes(b));
+        if (cowrieMatch) {
+            reasons.push(`Cowrie SSH banner on port ${port}: "${cowrieMatch}"`);
+            continue;
         }
 
-        // SSH banner with no OS distro suffix — real packages always include one
-        if (value.startsWith("TCP: SSH-2.0-OpenSSH") && !SSH_DISTRO_SUFFIX.test(value)) {
+        // bare version string with no OS suffix — real distro packages always include one
+        if (isSSH && !SSH_DISTRO_SUFFIX.test(value)) {
             reasons.push(`SSH banner missing OS suffix on port ${port} — possible honeypot: "${value.replace("TCP: ", "")}"`);
         }
     }
@@ -63,7 +65,7 @@ const scanResults = JSON.parse(fs.readFileSync(scanFile, "utf8"));
 let flagged = 0;
 
 for (const entry of scanResults) {
-    const reasons = checkHost(entry.host, entry.ports);
+    const reasons = checkHost(entry.ports);
 
     if (reasons.length > 0) {
         entry.honeypot = { suspected: true, reasons };

