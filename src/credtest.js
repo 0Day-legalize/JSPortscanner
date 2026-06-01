@@ -326,11 +326,13 @@ for (const hostEntry of scanResults) {
     if (Object.keys(found).length > 0) {
         hostEntry.credentials = found;
         if (honeypot) hostEntry.honeypot = "suspected — first credential accepted immediately";
-        fs.writeFileSync(scanFile, JSON.stringify(scanResults, null, 2), "utf8");
         console.log(`  → Saved credentials for ${hostEntry.host}${honeypot ? " [HONEYPOT SUSPECTED]" : ""}\n`);
     } else {
+        hostEntry.credentials = "none found";
         console.log(`  → No valid credentials found\n`);
     }
+
+    fs.writeFileSync(scanFile, JSON.stringify(scanResults, null, 2), "utf8");
 }
 
 console.log("Done.");
