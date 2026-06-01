@@ -11,7 +11,7 @@ const SUSPICIOUS_THRESHOLD = cfg.suspiciousPortThreshold;
 // Real distro-packaged OpenSSH always includes an OS suffix — bare version strings are a Cowrie tell
 const SSH_DISTRO_SUFFIX = new RegExp(`SSH-2\\.0-OpenSSH_[\\d.p]+\\s+(${cfg.sshDistroKeywords.join("|")})`, "i");
 
-// --- detection logic ---
+// --- ʕ•ᴥ•ʔ detection logic ʕ•ᴥ•ʔ ---
 
 function checkHost(ports) {
     const reasons = [];
@@ -52,7 +52,7 @@ function checkHost(ports) {
     return reasons;
 }
 
-// --- main ---
+// --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
 const [scanFile] = process.argv.slice(2);
 

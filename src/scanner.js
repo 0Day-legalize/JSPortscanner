@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 let raw = null;
 try { raw = require("raw-socket"); } catch {}
 
-// --- config ---
+// --- ʕ•ᴥ•ʔ config ʕ•ᴥ•ʔ ---
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).scanner;
 
@@ -25,7 +25,7 @@ const J_MAX    = cfg.jitterMaxMs;
 const DECOYS   = cfg.decoyCount;
 const PLAIN    = new Set(cfg.plaintextPorts);
 
-// --- obfuscation helpers ---
+// --- ʕ•ᴥ•ʔ obfuscation helpers ʕ•ᴥ•ʔ ---
 
 const rand = (n) => Math.floor(Math.random() * n);
 
@@ -42,7 +42,7 @@ function shufflePorts(first, last) {
     return list;
 }
 
-// --- obfuscation decoy IPs ---
+// --- ʕ•ᴥ•ʔ obfuscation decoy IPs ʕ•ᴥ•ʔ ---
 
 function randomPrivateIP() {
     const pick = rand(3);
@@ -124,7 +124,7 @@ function sendDecoys(dstIP, dstPort) {
     }
 }
 
-// --- port scanning + banner grabbing ---
+// --- ʕ•ᴥ•ʔ port scanning + banner grabbing ʕ•ᴥ•ʔ ---
 
 function tryTCPConnect(host, port, useTLS, hostname) {
     return new Promise((resolve) => {
@@ -173,7 +173,7 @@ async function scanTCPPort(host, port, hostname = host) {
     return { proto: tlsRes === null ? "TCP" : "TLS", port, data: res };
 }
 
-// --- udp port scanning ---
+// --- ʕ•ᴥ•ʔ udp port scanning ʕ•ᴥ•ʔ ---
 
 function tryUDPConnect(host, port) {
     return new Promise((resolve) => {
@@ -208,7 +208,7 @@ async function scanUDPPort(host, port) {
     return { proto: "UDP", port, data: res };
 }
 
-// --- host scan ---
+// --- ʕ•ᴥ•ʔ host scan ʕ•ᴥ•ʔ ---
 
 async function scanHost(host, firstPort, lastPort, onProgress) {
     const portList  = shufflePorts(firstPort, lastPort);
@@ -265,7 +265,7 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
     return { host, ports, scannedAt: new Date().toISOString() };
 }
 
-// --- target parsing ---
+// --- ʕ•ᴥ•ʔ target parsing ʕ•ᴥ•ʔ ---
 
 function expandCIDR(cidr) {
     const [baseIP, prefix] = cidr.split("/");
@@ -293,7 +293,7 @@ function parseTargetFile(filePath) {
     return hosts;
 }
 
-// --- main ---
+// --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
 if (process.getuid() !== 0) {
     console.error("must be run as root (sudo)");

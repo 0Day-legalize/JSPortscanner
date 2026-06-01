@@ -6,7 +6,7 @@ import { jitter, runPool } from "./utils.js";
 const require = createRequire(import.meta.url);
 
 
-// --- optional dependencies ---
+// --- ʕ•ᴥ•ʔ optional dependencies ʕ•ᴥ•ʔ ---
 
 
 // Load ssh2 and basic-ftp optionally so missing packages don't crash the tool
@@ -19,7 +19,7 @@ try { ftpLib = require("basic-ftp"); }               catch { console.warn("[warn
 try { ({ default: axios } = await import("axios")); } catch { console.warn("[warn] axios not installed — HTTP testing disabled"); }
 
 
-// --- config ---
+// --- ʕ•ᴥ•ʔ config ʕ•ᴥ•ʔ ---
 
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).credtest;
@@ -36,7 +36,7 @@ const HTTP_ENDPOINTS   = cfg.httpEndpoints;
 const HTTP_FIELDS      = cfg.httpFields;
 
 
-// --- ssh ---
+// --- ʕ•ᴥ•ʔ ssh ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -72,7 +72,7 @@ function trySSH(host, port, username, password) {
 }
 
 
-// --- ftp ---
+// --- ʕ•ᴥ•ʔ ftp ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -107,7 +107,7 @@ async function tryFTP(host, port, user, password) {
 }
 
 
-// --- http ---
+// --- ʕ•ᴥ•ʔ http ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -165,7 +165,7 @@ async function tryHTTP(host, port, username, password, useHTTPS) {
 }
 
 
-// --- service detection ---
+// --- ʕ•ᴥ•ʔ service detection ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -186,7 +186,7 @@ function detectService(portNum, portValue) {
 }
 
 
-// --- wordlist ---
+// --- ʕ•ᴥ•ʔ wordlist ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -209,7 +209,7 @@ function parseWordlist(filePath) {
 }
 
 
-// --- host tester ---
+// --- ʕ•ᴥ•ʔ host tester ʕ•ᴥ•ʔ ---
 
 
 /**
@@ -272,7 +272,7 @@ async function testHost(host, ports, credentials) {
 }
 
 
-// --- main ---
+// --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
 
 const args        = process.argv.slice(2);
