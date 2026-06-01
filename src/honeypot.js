@@ -39,8 +39,8 @@ function probeSSHFingerprint(host, port) {
         socket.on("error",   () => resolve(null));
 
         socket.on("connect", () => {
-            // send a minimal SSH version string to trigger the server's KEX_INIT
-            socket.write("SSH-2.0-RCN\r\n");
+            // impersonate a real SSH client to avoid leaving an identifiable version string in logs
+            socket.write("SSH-2.0-OpenSSH_8.9p1\r\n");
         });
 
         socket.on("data", (chunk) => {
