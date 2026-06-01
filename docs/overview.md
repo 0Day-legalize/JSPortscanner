@@ -38,6 +38,7 @@ CLI arguments
 │      │                  │
 │      ├─ shufflePorts()  │  randomise probe order
 │      ├─ dns.lookup()    │  resolve hostname → IP (for decoys)
+│      ├─ dns.reverse()   │  PTR lookup → hostname for TLS SNI + HTTP Host header
 │      │                  │
 │      │  TCP pool        │  runPool(tcpTasks, MAX_TCP_CONNECTIONS)
 │      │    jitter()      │  random inter-probe delay
@@ -74,7 +75,7 @@ CLI arguments
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
-  scan.json  wordlist.txt
+  scan.json  wordlist.txt  [--hosts=ip1,ip2,...]
        │
        ▼
 ┌─────────────────────────┐

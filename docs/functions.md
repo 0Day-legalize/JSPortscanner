@@ -231,18 +231,20 @@ shufflePorts(1, 5);
 
 ---
 
-## tryTCPConnect(host, port, useTLS)
+## tryTCPConnect(host, port, useTLS, hostname)
 
 **Purpose:**
 Opens a single TCP or TLS connection to the target and attempts to elicit a banner by sending an
-HTTP HEAD request. Returns whatever the service sends back, or null if the connection could not be
-established.
+HTTP/1.1 HEAD request. Returns whatever the service sends back, or null if the connection could not
+be established.
 
 **Parameters:**
-- `host`   `{string}`  — IP address or hostname to connect to
-- `port`   `{number}`  — destination port (1–65535)
-- `useTLS` `{boolean}` — when `true`, wraps the socket in TLS (`rejectUnauthorized: false` so
+- `host`     `{string}`  — IP address or hostname to connect to
+- `port`     `{number}`  — destination port (1–65535)
+- `useTLS`   `{boolean}` — when `true`, wraps the socket in TLS (`rejectUnauthorized: false` so
   self-signed certificates do not abort the connection)
+- `hostname` `{string}`  — value used in the TLS `servername` field and the HTTP `Host` header;
+  typically a PTR-resolved hostname so traffic resembles a real browser session
 
 **Returns:** `{Promise<string|null>}`
 - Response text (possibly empty string `""`) if the connection was established
@@ -251,6 +253,9 @@ established.
 **Notes:**
 - `rejectUnauthorized: false` is intentional — scanning infrastructure often uses self-signed certs
   and we care about open/closed state, not certificate validity.
+- `servername` is omitted from the TLS options when `hostname` is a bare IP address. The TLS SNI
+  extension requires a DNS name; passing an IP as `servername` causes handshake failures on some
+  implementations.
 - The HTTP HEAD probe is opportunistic. Services that do not speak HTTP will respond with their own
   banner (e.g. SSH, FTP, SMTP) or nothing at all. In both cases `responseData` holds whatever
   bytes arrived.
@@ -259,17 +264,16 @@ established.
 - The `error` event only resolves the promise with `null` when `isConnected` is false. If an error
   fires after connect (e.g. mid-transfer RST) the `close` event resolves it instead with whatever
   data arrived — partial responses are still useful.
-- `localPort` is set via `randomSourcePort()` on every call, not once per host.
 
 **Example:**
 ```js
-const data = await tryTCPConnect("10.0.0.1", 443, true);
+const data = await tryTCPConnect("10.0.0.1", 443, true, "example.com");
 if (data !== null) console.log("443 is open, got:", data.slice(0, 80));
 ```
 
 ---
 
-## scanTCPPort(host, port)
+## scanTCPPort(host, port, hostname)
 
 **Purpose:**
 Orchestrates the TLS-first probe strategy for a single port. TLS is attempted first because
@@ -278,8 +282,10 @@ connecting with plain TCP to a TLS port produces no useful data (the server resp
 HTTPS, SMTPS, and similar services without a wasted round-trip.
 
 **Parameters:**
-- `host` `{string}` — IP address or hostname
-- `port` `{number}` — TCP port number to scan
+- `host`     `{string}` — IP address or hostname
+- `port`     `{number}` — TCP port number to scan
+- `hostname` `{string}` — (optional, defaults to `host`) PTR-resolved hostname passed through to
+  `tryTCPConnect` for use in TLS SNI and the HTTP `Host` header
 
 **Returns:** `{Promise<{proto: string, port: number, data: string|null}>}`
 - `proto` — `"TLS"` if the TLS probe succeeded, `"TCP"` otherwise
@@ -417,16 +423,17 @@ multiple targets.
 - `firstPort` `{number}` — start of port range, inclusive
 - `lastPort`  `{number}` — end of port range, inclusive
 
-**Returns:** `{Promise<{host: string, ports: Array, scannedAt: string}>}`
+**Returns:** `{Promise<{host: string, ports: object, scannedAt: string}>}`
 - `host`      — echoed input value
-- `ports`     — array of open-port objects sorted ascending by port then proto, each:
-  `{ port: number, proto: string, state: "open", banner: string[]|null }`
+- `ports`     — plain object keyed by port number string, values are proto/banner strings, e.g.
+  `{ "22": "TCP: SSH-2.0-OpenSSH_8.9", "443": "TLS" }`; ports are sorted ascending before the
+  object is built
 - `scannedAt` — ISO 8601 timestamp of when the scan completed
 
 **Notes:**
-- DNS resolution happens once per host at the top of this function, not once per port. The resolved
-  IP is used only for decoy sending — `scanTCPPort` and `scanUDPPort` still use the original `host`
-  string so that TLS SNI works correctly when `host` is a hostname.
+- DNS resolution happens twice per host: once with `dns.lookup()` to get the IP for decoy sending,
+  and once with `dns.reverse()` to get the PTR hostname for use in TLS SNI and the HTTP `Host`
+  header. Both lookups are silently skipped on failure.
 - If DNS lookup fails the host is scanned normally but decoys are disabled (silently). The catch
   block intentionally has no body.
 - `onPortResult` is an inner function rather than a top-level one because it closes over
@@ -442,7 +449,7 @@ multiple targets.
 **Example:**
 ```js
 const result = await scanHost("192.168.1.1", 1, 1024);
-// => { host: "192.168.1.1", ports: [{ port: 22, proto: "TCP", state: "open", banner: ["SSH-2.0-OpenSSH_8.9"] }], scannedAt: "2026-05-29T..." }
+// => { host: "192.168.1.1", ports: { "22": "TCP: SSH-2.0-OpenSSH_8.9", "80": "TCP: HTTP/1.1 200 OK" }, scannedAt: "2026-05-29T..." }
 ```
 
 ---
@@ -776,5 +783,35 @@ are found to minimise login noise and lockout risk.
 **Example:**
 ```js
 const hits = await testHost("10.0.0.5", { "22": "TCP", "80": "TCP: HTTP/1.1 200 OK" }, creds);
-// => { "22": { user: "root", pass: "toor", service: "SSH" } }
+// => { found: { "22": { user: "root", pass: "toor", service: "SSH" } }, honeypot: false }
 ```
+
+---
+
+## credtest.js — Entry Point
+
+**CLI syntax:**
+```
+node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
+```
+
+**Argument parsing:**
+- `args[0]` (`scanFile`) — path to the JSON file produced by the scanner
+- `args[1]` (`wordlistFile`) — path to a `username:password` wordlist
+- `args.find(a => a.startsWith("--hosts="))` — optional filter; comma-separated list of IP
+  addresses to restrict testing to a subset of the scan results
+
+**Behaviour:**
+1. Parses `--hosts=` from the raw `process.argv` array; all other args are positional.
+2. If `--hosts` is supplied, filters `scanResults` to only entries whose `host` field appears in
+   the provided set. Exits with an error if no matching hosts are found.
+3. Iterates hosts sequentially. For each host, calls `testHost()` and merges the returned
+   `found` map into `hostEntry.credentials`. Sets `hostEntry.honeypot` if the `honeypot` flag
+   is true.
+4. Writes the updated scan JSON back to `scanFile` after every host so a crash loses at most
+   one host's results.
+
+**Notes:**
+- The process does not require root — credential testing uses standard TCP connections only.
+- Missing optional packages (`ssh2`, `basic-ftp`, `axios`) print a warning but do not abort
+  startup; affected protocol testers return `false` silently at runtime.

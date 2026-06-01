@@ -212,32 +212,58 @@ a distinct fingerprint of a TLS-naive scanner. By skipping TLS on known plaintex
 
 ---
 
-## 6. User-Agent string
+## 6. HTTP/1.1 banner probe with PTR-resolved Host header
 
-**Implementation:** Hardcoded in `tryTCPConnect` as the `User-Agent` header value in the HTTP HEAD
-probe: `"Team Dangerous"`.
+**Implementation:** `tryTCPConnect` — after a successful connect, sends a full HTTP/1.1 HEAD
+request using the PTR-resolved hostname (from `dns.reverse()` in `scanHost`) as the `Host` header
+value.
 
 **What it does:**
-Sends a custom, non-standard User-Agent string in the HTTP HEAD request that is issued after a
-successful connection.
+On every successful TCP or TLS connection the scanner sends:
+
+```
+HEAD / HTTP/1.1
+Host: <ptr-resolved-hostname>
+User-Agent: Team Dangerous
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Connection: close
+```
+
+The `Host` value is the result of a reverse DNS (PTR) lookup on the target IP. If no PTR record
+exists, or if the IP could not be resolved, the IP address itself is used as a fallback.
 
 **Why it helps:**
-Default scanner User-Agent strings (`Nmap`, `masscan`, `python-requests/2.x.x`, `Go-http-client`)
-are included in most web application firewall (WAF) and IDS rule sets. Any scanner that announces
-itself with a well-known tool string will trigger an automatic block or alert. A custom string that
-does not match any known scanner signature passes through these rules silently.
+Two independent techniques combine here:
 
-| Scenario | What a WAF / IDS sees |
+1. **Realistic HTTP/1.1 headers.** A scanner sending a bare `HEAD / HTTP/1.0\r\n\r\n` is
+   immediately recognisable. Sending a full HTTP/1.1 request with `Accept`, `Accept-Language`,
+   and `Accept-Encoding` headers matches the profile of a real browser — most WAF
+   heuristics filter on header completeness as well as User-Agent string.
+
+2. **PTR hostname in the Host header.** Web servers and reverse proxies log the `Host` header
+   for virtual-host routing. A request with `Host: <real-hostname>` looks like a browser that
+   resolved the hostname via DNS and then connected directly. A request with `Host: 10.0.0.5`
+   (a bare IP) is an immediate signal of programmatic access, not human browsing.
+
+3. **Custom User-Agent.** Default scanner strings (`Nmap`, `masscan`, `python-requests/2.x.x`,
+   `Go-http-client`) are present in most WAF and IDS rule sets. `"Team Dangerous"` matches no
+   known-scanner signature rule.
+
+| Scenario | What a WAF / server log shows |
 |---|---|
-| Without custom UA | `User-Agent: python-urllib3/1.26` → matches "known scanner" rule → blocked |
-| With custom UA | `User-Agent: Team Dangerous` → no rule match → request passes |
+| Naive scanner | `HEAD / HTTP/1.0` from bare IP, no Host header → matches "scanner" heuristic |
+| This scanner | Full HTTP/1.1 request with PTR hostname, realistic headers → resembles browser traffic |
 
 **Gotchas:**
-- HTTP 1.0 (`HTTP/1.0`) is used deliberately. HTTP/1.1 requires a `Host` header and the server
-  may expect persistent connections, complicating the probe. HTTP/1.0 with `Connection: close`
-  produces the cleanest single-response interaction.
 - The User-Agent only matters when the target speaks HTTP/HTTPS. For all other services (SSH, FTP,
   SMTP, databases) the HTTP request is sent but ignored or met with an error — the banner data
   returned is whatever the service sent spontaneously on connection.
+- If no PTR record exists for the target IP, the `Host` header falls back to the IP address. This
+  is less stealthy but functionally correct.
+- TLS SNI (`servername`) also uses the PTR hostname. When `hostname` is a bare IP address (no PTR
+  record found), `servername` is omitted from the `tls.connect` options entirely — passing an IP
+  as `servername` causes handshake failures on some TLS implementations.
 - A sufficiently sophisticated IDS that fingerprints scanner behaviour (rather than string matching)
-  will still detect the probe pattern regardless of User-Agent.
+  will still detect the probe pattern regardless of header content.

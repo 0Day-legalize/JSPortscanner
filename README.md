@@ -67,18 +67,24 @@ sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 ### Step 2 — Test credentials against scan results
 
 ```bash
-node src/credtest.js <scan.json> <wordlist.txt>
+node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
 ```
 
 Pass the JSON file produced by the scanner and a wordlist of `username:password` pairs.
 Credentials that succeed are written back into the same JSON file under a `credentials` field.
 
+The optional `--hosts` flag restricts testing to a comma-separated list of IPs from the scan file.
+Without it, every host in the scan file is tested.
+
 ```bash
-# Test with the default wordlist
+# Test all hosts with the default wordlist
 node src/credtest.js scans/scan_1748476800000.json config/wordlist.txt
 
 # Test with a custom wordlist
 node src/credtest.js scans/results.json /path/to/passwords.txt
+
+# Test only specific hosts from the scan
+node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,192.168.1.5
 ```
 
 ---
