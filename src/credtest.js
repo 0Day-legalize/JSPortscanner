@@ -163,12 +163,16 @@ async function tryHTTP(host, port, username, password, useHTTPS) {
  * @returns {"ssh"|"ftp"|"http"|"https"|null}
  */
 function detectService(portNum, portValue) {
-    if (SSH_PORTS.has(portNum))                      return "ssh";
-    if (FTP_PORTS.has(portNum))                      return "ftp";
-    if (HTTPS_PORTS.has(portNum))                    return "https";
-    if (HTTP_PORTS.has(portNum))                     return "http";
-    if (portValue.startsWith("TLS"))                 return "https";
-    if (portValue.startsWith("TCP: HTTP"))           return "http";
+    // support both old string format and new object format
+    const proto  = typeof portValue === "object" ? portValue.proto   : portValue.split(":")[0].trim();
+    const banner = typeof portValue === "object" ? (portValue.banner || "") : portValue;
+
+    if (SSH_PORTS.has(portNum))                         return "ssh";
+    if (FTP_PORTS.has(portNum))                         return "ftp";
+    if (HTTPS_PORTS.has(portNum))                       return "https";
+    if (HTTP_PORTS.has(portNum))                        return "http";
+    if (proto === "TLS")                                return "https";
+    if (proto === "TCP" && banner.startsWith("HTTP"))   return "http";
     return null;
 }
 

@@ -133,27 +133,29 @@ function checkHost(ports) {
     const openPorts = Object.keys(ports).map(Number);
 
     for (const [port, value] of Object.entries(ports)) {
-        const isSSH = value.startsWith("TCP: SSH-2.0-OpenSSH");
-        const isFTP = value.startsWith("TCP: 220");
+        // support both old string format and new object format
+        const proto  = typeof value === "object" ? value.proto   : value.split(":")[0].trim();
+        const banner = typeof value === "object" ? (value.banner || "") : value.replace(/^TCP: |^TLS: /, "");
+
+        const isSSH = proto === "TCP" && banner.startsWith("SSH-2.0-OpenSSH");
+        const isFTP = proto === "TCP" && banner.startsWith("220");
 
         // exact Cowrie SSH banner — takes priority to avoid double-flagging
-        const cowrieMatch = isSSH && COWRIE_SSH_BANNERS.find(b => value.includes(b));
+        const cowrieMatch = isSSH && COWRIE_SSH_BANNERS.find(b => banner.includes(b));
         if (cowrieMatch) {
             reasons.push(`Cowrie SSH banner on port ${port}: "${cowrieMatch}"`);
             continue;
         }
 
         // SSH banner with no OS distro suffix
-        if (isSSH && !SSH_DISTRO_SUFFIX.test(value)) {
-            reasons.push(`SSH banner missing OS suffix on port ${port}: "${value.replace("TCP: ", "")}"`);
+        if (isSSH && !SSH_DISTRO_SUFFIX.test(banner)) {
+            reasons.push(`SSH banner missing OS suffix on port ${port}: "${banner}"`);
         }
 
         // FTP banner matches known honeypot strings
         if (isFTP) {
-            const ftpMatch = FTP_HONEYPOT_BANNERS.find(b => value.includes(b));
-            if (ftpMatch) {
-                reasons.push(`Honeypot FTP banner on port ${port}: "${ftpMatch}"`);
-            }
+            const ftpMatch = FTP_HONEYPOT_BANNERS.find(b => banner.includes(b));
+            if (ftpMatch) reasons.push(`Honeypot FTP banner on port ${port}: "${ftpMatch}"`);
         }
     }
 
@@ -190,7 +192,9 @@ for (const entry of scanResults) {
 
     // live SSH KEX fingerprint probe for any SSH port found
     for (const [portStr, value] of Object.entries(entry.ports)) {
-        if (!value.startsWith("TCP: SSH")) continue;
+        const proto  = typeof value === "object" ? value.proto   : value.split(":")[0].trim();
+        const banner = typeof value === "object" ? (value.banner || "") : value.replace(/^TCP: /, "");
+        if (proto !== "TCP" || !banner.startsWith("SSH")) continue;
         const fp = await probeSSHFingerprint(entry.host, Number(portStr));
         if (fp) reasons.push(...checkSSHFingerprint(fp, portStr));
     }

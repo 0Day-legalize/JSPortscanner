@@ -173,17 +173,104 @@ function tryTCPConnect(host, port, useTLS, hostname) {
     });
 }
 
+/**
+ * Extracts useful fields from a TLS certificate — common name, SANs, org, issuer, expiry.
+ * SANs reveal all domain names tied to the IP which identifies the owner.
+ *
+ * @param {import("tls").TLSSocket} socket
+ * @returns {object|null}
+ */
+function extractCert(socket) {
+    try {
+        const cert    = socket.getPeerCertificate();
+        if (!cert || !cert.subject) return null;
+
+        const sans = cert.subjectaltname
+            ? cert.subjectaltname.split(", ").map(s => s.replace(/^DNS:|^IP Address:/, ""))
+            : [];
+
+        return {
+            cn:      cert.subject.CN   || null,
+            org:     cert.subject.O    || null,
+            issuer:  cert.issuer?.O    || null,
+            sans:    sans.length > 0   ? sans : null,
+            expires: cert.valid_to     || null,
+        };
+    } catch { return null; }
+}
+
+/**
+ * Parses HTTP response headers from raw response text into a key/value object.
+ * Captures Server, X-Powered-By, Content-Type and other useful fingerprinting headers.
+ *
+ * @param {string} raw - Full HTTP response text
+ * @returns {object}
+ */
+function parseHeaders(raw) {
+    const headers = {};
+    const lines   = raw.split(/\r?\n/).slice(1); // skip status line
+    const useful  = new Set(["server", "x-powered-by", "content-type", "location", "x-generator", "x-drupal-cache", "x-wordpress-cache"]);
+
+    for (const line of lines) {
+        const sep = line.indexOf(":");
+        if (sep === -1) break;
+        const key = line.slice(0, sep).trim().toLowerCase();
+        if (useful.has(key)) headers[key] = line.slice(sep + 1).trim();
+    }
+    return Object.keys(headers).length > 0 ? headers : null;
+}
+
+function tryTLSConnect(host, port, hostname) {
+    return new Promise((resolve) => {
+        const isIP   = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
+        const socket = tls.connect({
+            host, port,
+            rejectUnauthorized: false,
+            ...(isIP ? {} : { servername: hostname }),
+        });
+
+        let data = "";
+        let cert = null;
+
+        socket.setTimeout(TIMEOUT);
+
+        socket.on("secureConnect", () => {
+            cert = extractCert(socket);
+            socket.write(
+                `HEAD ${randomPath()} HTTP/1.1\r\n` +
+                `Host: ${hostname}\r\n` +
+                `User-Agent: ${randomUA()}\r\n` +
+                `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
+                `Accept-Language: ${randomLanguage()}\r\n` +
+                `Accept-Encoding: gzip, deflate\r\n` +
+                `Referer: ${randomReferer()}\r\n` +
+                `Cookie: ${randomCookie()}\r\n` +
+                `Connection: close\r\n\r\n`
+            );
+        });
+
+        socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });
+        socket.on("timeout", ()      => socket.destroy());
+        socket.on("error",   ()      => resolve(null));
+        socket.on("close",   ()      => resolve(data ? { data, cert } : null));
+    });
+}
+
 async function scanTCPPort(host, port, hostname = host) {
     if (PLAIN.has(port)) {
         const res = await tryTCPConnect(host, port, false, hostname);
-        return { proto: "TCP", port, data: res };
+        return { proto: "TCP", port, data: res, cert: null, headers: null };
     }
 
-    const tlsRes = await tryTCPConnect(host, port, true, hostname);
-    const tcpRes = tlsRes === null ? await tryTCPConnect(host, port, false, hostname) : null;
-    const res    = tlsRes ?? tcpRes;
+    const tlsRes = await tryTLSConnect(host, port, hostname);
+    if (tlsRes !== null) {
+        const headers = tlsRes.data ? parseHeaders(tlsRes.data) : null;
+        return { proto: "TLS", port, data: tlsRes.data, cert: tlsRes.cert, headers };
+    }
 
-    return { proto: tlsRes === null ? "TCP" : "TLS", port, data: res };
+    const tcpRes = await tryTCPConnect(host, port, false, hostname);
+    const headers = tcpRes ? parseHeaders(tcpRes) : null;
+    return { proto: "TCP", port, data: tcpRes, cert: null, headers };
 }
 
 // --- ʕ•ᴥ•ʔ udp port scanning ʕ•ᴥ•ʔ ---
@@ -243,7 +330,7 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
         }
     } catch {}
 
-    function onResult({ proto, port, data }) {
+    function onResult({ proto, port, data, cert, headers }) {
         if (onProgress) onProgress();
         if (!data || data === "OPEN|FILTERED" || data.startsWith("ERROR:")) return;
 
@@ -251,7 +338,11 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
             ? data.trim().split(/\r?\n/)
             : null;
 
-        openPorts.push({ port, value: banner ? `${proto}: ${banner[0]}` : proto });
+        const entry = { banner: banner ? banner[0] : null };
+        if (cert)    entry.cert    = cert;
+        if (headers) entry.headers = headers;
+
+        openPorts.push({ port, proto, entry });
     }
 
     const tcpTasks = portList.map((port) => async () => {
@@ -273,9 +364,11 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
     openPorts.sort((a, b) => a.port - b.port);
 
     const ports = {};
-    for (const { port, value } of openPorts) ports[port] = value;
+    for (const { port, proto, entry } of openPorts) {
+        ports[port] = { proto, ...entry };
+    }
 
-    return { host, ports, scannedAt: new Date().toISOString() };
+    return { host, hostname: hostname !== host ? hostname : undefined, ports, scannedAt: new Date().toISOString() };
 }
 
 // --- ʕ•ᴥ•ʔ target parsing ʕ•ᴥ•ʔ ---
