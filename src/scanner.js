@@ -221,7 +221,7 @@ async function scanUDPPort(host, port) {
 
 // --- host scan ---
 
-async function scanHost(host, firstPort, lastPort) {
+async function scanHost(host, firstPort, lastPort, onProgress) {
     const portList  = shufflePorts(firstPort, lastPort);
     const openPorts = [];
 
@@ -242,14 +242,12 @@ async function scanHost(host, firstPort, lastPort) {
     } catch {}
 
     function onResult({ proto, port, data }) {
+        if (onProgress) onProgress();
         if (!data || data === "OPEN|FILTERED" || data.startsWith("ERROR:")) return;
 
         const banner = typeof data === "string" && data.trim()
             ? data.trim().split(/\r?\n/)
             : null;
-
-        process.stdout.write("\r\x1b[K");
-        console.log(`  OPEN  ${host}:${port} [${proto}]${banner ? "  " + banner[0] : ""}`);
 
         openPorts.push({ port, value: banner ? `${proto}: ${banner[0]}` : proto });
     }
@@ -336,34 +334,33 @@ const hosts = resolveTargets(targetFile);
 
 console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
-const results = [];
-let done    = 0;
-let hits    = 0;
-const BAR   = 30;
+const results     = [];
+let hits          = 0;
+let portsScanned  = 0;
+const totalPorts  = hosts.length * (lastPort - firstPort + 1) * 2; // TCP + UDP per host
+const BAR         = 30;
 
 function renderBar() {
-    const pct      = done / hosts.length;
-    const filled   = Math.floor(pct * BAR);
-    const raccoon  = "ʕ•ᴥ•ʔ";
-    const eaten    = "·".repeat(filled);
-    const remaining = "·".repeat(BAR - filled);
-    const pctStr   = String(Math.floor(pct * 100)).padStart(3, " ");
-    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${done}/${hosts.length}  ${pctStr}%  * ${hits}`);
+    const pct       = totalPorts > 0 ? portsScanned / totalPorts : 0;
+    const filled    = Math.floor(pct * BAR);
+    const raccoon   = "ʕ•ᴥ•ʔ";
+    const eaten     = "·".repeat(filled);
+    const remaining = "·".repeat(Math.max(0, BAR - filled));
+    const pctStr    = String(Math.floor(pct * 100)).padStart(3, " ");
+    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  * ${hits}`);
+}
+
+function onPortProgress() {
+    portsScanned++;
+    renderBar();
 }
 
 const tasks = hosts.map((host) => async () => {
-    const result = await scanHost(host, firstPort, lastPort);
+    const result = await scanHost(host, firstPort, lastPort, onPortProgress);
     const count  = Object.keys(result.ports).length;
 
     if (count > 0) { results.push(result); hits += count; }
-    done++;
 
-    if (count > 0) {
-        process.stdout.write("\r\x1b[K");
-        console.log(`  * ${host} — ${count} open`);
-    }
-
-    renderBar();
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
 });
 
