@@ -314,9 +314,13 @@ const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-const hosts = fs.existsSync(targetFile)
-    ? parseTargetFile(targetFile)
-    : targetFile.includes("/") ? expandCIDR(targetFile) : [targetFile];
+function resolveTargets(target) {
+    if (fs.existsSync(target))   return parseTargetFile(target);
+    if (target.includes("/"))    return expandCIDR(target);
+    return [target];
+}
+
+const hosts = resolveTargets(targetFile);
 
 console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
