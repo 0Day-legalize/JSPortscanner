@@ -1,14 +1,19 @@
 # Port Scanner — Architecture Overview
 
-A stealth-capable TCP/UDP port scanner written in Node.js ESM.
-It resolves targets, shuffles and probes ports with injected jitter and decoy SYN packets, then
-writes all open-port results to a JSON file.
+A stealth-capable TCP/UDP port scanner written in Node.js ESM with an optional credential-testing
+phase. It resolves targets, shuffles and probes ports with injected jitter and decoy SYN packets,
+writes all open-port results to a JSON file, and can then run a wordlist-based login test against
+every detected service.
 
 ---
 
 ## Data flow
 
 ```
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 1 — PORT SCANNING  (src/scanner.js)               │
+└──────────────────────────────────────────────────────────┘
+
 CLI arguments
   targetFile  firstPort  lastPort  [outputFile]
        │
@@ -49,7 +54,7 @@ CLI arguments
 │      onPortResult()     │  filters, prints, accumulates
 │      sort by port       │
 └──────────┬──────────────┘
-           │  { host, ports[], scannedAt }[]
+           │  { host, ports{}, scannedAt }[]
            ▼
 ┌─────────────────────────┐
 │   Output                │
@@ -59,6 +64,53 @@ CLI arguments
 │  (fs.writeFileSync)     │
 │                         │
 │  scans/scan_<ts>.json   │  timestamped default path
+└──────────┬──────────────┘
+           │
+           │  (optional — run manually as a second step)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 2 — CREDENTIAL TESTING  (src/credtest.js)         │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json  wordlist.txt
+       │
+       ▼
+┌─────────────────────────┐
+│   Input parsing         │
+│                         │
+│  JSON.parse(scan.json)  │  load scan results from Phase 1
+│  parseWordlist()        │  load username:password pairs
+└──────────┬──────────────┘
+           │  scanResults[]  +  credentials[]
+           ▼
+┌─────────────────────────┐
+│   Host loop             │  sequential, one host at a time
+│                         │
+│  For each host entry:   │
+│    testHost()           │
+│      │                  │
+│      ├─ detectService() │  classify each open port by number/banner
+│      │                  │
+│      │  Per service:    │  runPool(tasks, CRED_CONCURRENCY)
+│      │    jitter()      │  random inter-attempt delay (500–2000ms)
+│      │    trySSH()      │  ssh2 auth attempt
+│      │    tryFTP()      │  basic-ftp plain + implicit TLS
+│      │    tryHTTP()     │  axios POST across endpoints × field sets
+│      │                  │
+│      └─ stop on first   │  cracked flag halts remaining tasks
+│         valid cred      │
+└──────────┬──────────────┘
+           │  hits: { port → { user, pass, service } }
+           ▼
+┌─────────────────────────┐
+│   Output (merge)        │
+│                         │
+│  Successful creds are   │
+│  written back into the  │  hostEntry.credentials = hits
+│  original scan JSON     │
+│  after each host        │  incremental flush — survives early exit
 └─────────────────────────┘
 ```
 
@@ -74,8 +126,13 @@ CLI arguments
 | Decoy SYN packets from private IPs | Floods IDS alert queues with spoofed origins before each real probe |
 | TLS attempted before plain TCP | A plaintext connect to a TLS port returns garbage; TLS-first gets useful data |
 | PLAINTEXT_PORTS skip-list | Avoids wasted TLS handshake attempts on protocols that never negotiate TLS |
-| Incremental JSON flush | Partial results are preserved if the process is interrupted |
+| Incremental JSON flush (scanner) | Partial results are preserved if the process is interrupted |
+| Incremental JSON flush (credtest) | Cracked credentials are saved host-by-host; a crash loses at most one host |
+| Credential testing is a separate process | Decouples scan speed from login attempt rate; each phase can be tuned independently |
+| credtest jitter range is wider (500–2000ms) | Login attempts must stay below account lockout thresholds; wider spacing is safer |
+| `cracked` flag stops the wordlist on first hit | Avoids unnecessary login noise after success; most services lock accounts after N failures |
 | `raw-socket` loaded optionally | Scanner still functions (without decoys) when not running as root |
+| Optional npm dependencies in credtest | Missing ssh2/basic-ftp/axios disables that protocol without crashing the tool |
 
 ---
 
@@ -84,15 +141,18 @@ CLI arguments
 ```
 PortScanner/
 ├── src/
-│   └── scanner.js          Single-file scanner — all logic lives here
+│   ├── scanner.js          Port scanner — all scan logic lives here
+│   └── credtest.js         Credential tester — runs after scanner produces output
 ├── config/
-│   └── targets.txt         Default target list (IPs, hostnames, CIDRs)
+│   ├── settings.json       Tunable parameters for both scanner and credtest
+│   ├── targets.txt         Default target list (IPs, hostnames, CIDRs)
+│   └── wordlist.txt        Default credential wordlist (username:password)
 ├── scans/                  JSON output directory (auto-created at runtime)
 └── docs/
     ├── overview.md         This file
     ├── functions.md        Per-function reference
     ├── obfuscation.md      Stealth technique details
-    └── constants.md        Constant reference
+    └── constants.md        settings.json field reference
 ```
 
 ---
@@ -101,4 +161,7 @@ PortScanner/
 
 - Node.js 18+ (ESM `import`, top-level `await`)
 - `raw-socket` npm package (optional — required for decoy SYN injection)
-- Root / `sudo` (enforced at startup — required by raw socket API)
+- `ssh2` npm package (optional — required for SSH credential testing)
+- `basic-ftp` npm package (optional — required for FTP credential testing)
+- `axios` npm package (optional — required for HTTP/HTTPS credential testing)
+- Root / `sudo` (enforced at scanner startup — required by raw socket API)

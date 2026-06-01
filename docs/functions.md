@@ -1,6 +1,7 @@
 # Function Reference
 
-All functions are defined in `src/scanner.js`. They are listed in the order they appear in the file.
+Functions are grouped by source file. Scanner functions are listed first, followed by credtest functions.
+Within each group they appear in file order.
 
 ---
 
@@ -510,4 +511,270 @@ scanme.example.com
 ```js
 parseTargetFile("config/targets.txt");
 // => ["10.0.1.5", "scanme.example.com", "192.168.0.1", "192.168.0.2", ..., "192.168.0.14"]
+```
+
+---
+
+---
+
+# credtest.js — Function Reference
+
+All functions below are defined in `src/credtest.js`. They are listed in the order they appear in the file.
+
+---
+
+## jitter() — credtest
+
+**Purpose:**
+Pauses execution for a random duration between `JITTER_MIN_MS` (500ms) and `JITTER_MAX_MS` (2000ms).
+The wider range compared to the scanner's jitter is deliberate — login attempts must stay well below
+the threshold that triggers account lockout policies, which typically activate at multiple attempts
+within a few seconds.
+
+**Parameters:** none
+
+**Returns:** `{Promise<void>}`
+
+**Notes:**
+- Called before every individual credential attempt, not once per wordlist entry per host.
+- With `CRED_CONCURRENCY = 3` workers and a mean delay of 1250ms, the effective attempt rate is
+  roughly `3 / 1250ms ≈ 2.4 attempts/sec` per port — well under most lockout thresholds.
+- The delay distribution is uniform, not Gaussian, for the same reason as in `scanner.js`.
+
+**Example:**
+```js
+await jitter(); // waits between 500ms and 2000ms
+await trySSH(host, port, user, pass);
+```
+
+---
+
+## runPool(taskList, workerLimit, onTaskDone) — credtest
+
+**Purpose:**
+Identical in behaviour to `runPool` in `scanner.js` — executes async tasks with a bounded
+concurrency limit. Duplicated here so `credtest.js` has no import dependency on `scanner.js`.
+
+**Parameters:**
+- `taskList`    `{Array<() => Promise<any>>}` — zero-argument factory functions; not started until a worker picks them up
+- `workerLimit` `{number}` — maximum concurrent tasks
+- `onTaskDone`  `{(result: any) => void}` — called with each task's resolved value on completion
+
+**Returns:** `{Promise<void>}` — resolves after every task completes
+
+**Notes:**
+- See the `runPool` entry in the scanner section for a full explanation of the shared-counter
+  worker model and why it is safe in a single-threaded runtime.
+- `CRED_CONCURRENCY` (default 3) is deliberately much lower than `MAX_TCP_CONNECTIONS` (50) because
+  excessive parallel login attempts are more likely to trigger lockouts than FD exhaustion.
+
+---
+
+## trySSH(host, port, username, password)
+
+**Purpose:**
+Attempts a single SSH authentication using the `ssh2` library. Returns `true` if the server accepts
+the credentials, `false` for any other outcome including connection failure, timeout, or wrong
+password.
+
+**Parameters:**
+- `host`     `{string}` — target IP address or hostname
+- `port`     `{number}` — SSH port number
+- `username` `{string}` — login username
+- `password` `{string}` — login password
+
+**Returns:** `{Promise<boolean>}` — `true` if authentication succeeded, `false` otherwise
+
+**Notes:**
+- Returns `false` immediately if `ssh2` was not installed, preserving the optional-dependency
+  contract — the tool does not crash on missing packages.
+- Both the `ready` event and the manual `TIMEOUT_MS` timer clear each other to prevent double-resolve.
+  The `conn.destroy()` call on timeout causes the `error` event to fire, which also resolves to
+  `false` — but the `cracked` flag in `testHost` makes a duplicate resolve harmless.
+- `readyTimeout` in the `conn.connect` options doubles as an internal ssh2 connection timeout,
+  providing a defence-in-depth against the external timer being delayed by a busy event loop.
+
+**Example:**
+```js
+const ok = await trySSH("10.0.0.5", 22, "root", "toor");
+if (ok) console.log("SSH login succeeded");
+```
+
+---
+
+## tryFTP(host, port, user, password)
+
+**Purpose:**
+Attempts FTP login with both plain and implicit TLS connections, returning `true` on the first
+mode that authenticates successfully. Trying both modes avoids a false-negative when a port
+accepts FTPS but not plain FTP, or vice versa.
+
+**Parameters:**
+- `host`     `{string}` — target IP address or hostname
+- `port`     `{number}` — FTP port number
+- `user`     `{string}` — FTP username
+- `password` `{string}` — FTP password
+
+**Returns:** `{Promise<boolean>}` — `true` if either plain or implicit TLS login succeeded
+
+**Notes:**
+- Returns `false` immediately if `basic-ftp` was not installed.
+- A single `ftpLib.Client` instance is reused across both attempts. `client.close()` is called in
+  both the success and failure paths to ensure the underlying socket is always released.
+- `client.ftp.verbose = false` suppresses the library's internal debug logging to stdout, which
+  would otherwise mix with the tool's own progress output.
+- `secureOptions: { rejectUnauthorized: false }` is set for the TLS attempt because FTP servers
+  on private networks commonly use self-signed certificates.
+- Explicit FTPS (STARTTLS via `AUTH TLS` command) is not attempted here. Port 21 with explicit TLS
+  would require sending the `AUTH TLS` command mid-session, which `basic-ftp`'s `access()` does
+  not support in this code path.
+
+**Example:**
+```js
+const ok = await tryFTP("10.0.0.5", 21, "anonymous", "anon@");
+if (ok) console.log("FTP login succeeded");
+```
+
+---
+
+## tryHTTP(host, port, username, password, useHTTPS)
+
+**Purpose:**
+Submits a credential pair as a form POST across every combination of common login endpoints and
+field name sets. Treats a 302 redirect response with no failure-indicator text in the body as a
+successful login. Covers the most common web login patterns without requiring prior knowledge of
+the application.
+
+**Parameters:**
+- `host`      `{string}`  — target IP address or hostname
+- `port`      `{number}`  — HTTP or HTTPS port number
+- `username`  `{string}`  — value to place in the username field
+- `password`  `{string}`  — value to place in the password field
+- `useHTTPS`  `{boolean}` — when `true`, uses `https://` scheme and disables certificate validation
+
+**Returns:** `{Promise<boolean>}` — `true` if any endpoint/field combination returned a success response
+
+**Notes:**
+- Returns `false` immediately if `axios` was not installed.
+- Endpoints and field name pairs are driven by `HTTP_ENDPOINTS` and `HTTP_FIELDS` from `settings.json`,
+  so new login paths or field names can be added without touching this function.
+- `maxRedirects: 0` prevents axios from following the redirect. The 302 itself is the success
+  signal; following it would lose the status code needed for detection.
+- `validateStatus: (s) => s < 500` tells axios to resolve (not reject) for all non-5xx responses,
+  including 302 and 4xx, so catch blocks are only reached on network errors.
+- The body-text check (`invalid`, `incorrect`, `failed`) guards against login pages that return 302
+  even on bad credentials by redirecting back to the login form with an error message in the
+  response body.
+- `httpsAgent` is constructed inline per-call rather than shared because `import("node:https")` is
+  dynamic and the agent's `rejectUnauthorized: false` option must apply per-request.
+
+**Example:**
+```js
+const ok = await tryHTTP("10.0.0.5", 80, "admin", "admin123", false);
+if (ok) console.log("HTTP login succeeded");
+```
+
+---
+
+## detectService(portNum, portValue)
+
+**Purpose:**
+Classifies an open port as `ssh`, `ftp`, `http`, `https`, or `null` so `testHost` knows which
+protocol tester to invoke. Checks port number first against known port sets, then falls back to
+inspecting the banner string from the scan for TLS or HTTP indicators.
+
+**Parameters:**
+- `portNum`   `{number}` — the port number key from the scan JSON
+- `portValue` `{string}` — the proto/banner string stored for that port (e.g. `"TCP: SSH-2.0-OpenSSH_8.9"`, `"TLS"`)
+
+**Returns:** `{"ssh"|"ftp"|"http"|"https"|null}` — service type, or `null` if the port is not a recognised testable service
+
+**Notes:**
+- Port-number matching takes priority over banner matching. If port 22 runs an HTTP server (unusual
+  but possible), it will be treated as SSH. This is intentional — port numbers are the most reliable
+  classification signal for the common case.
+- Banner fallback (`portValue.startsWith("TLS")` → `"https"`) catches HTTPS running on non-standard
+  ports (e.g. 8443 is covered by `HTTPS_PORTS`, but 9443 would fall through to the banner check).
+- `null` is returned for UDP-only ports, database ports, or any service the tool does not support.
+  `testHost` skips `null` entries entirely.
+
+**Example:**
+```js
+detectService(22,   "TCP: SSH-2.0-OpenSSH_8.9")  // => "ssh"
+detectService(443,  "TLS")                        // => "https"
+detectService(8080, "TCP: HTTP/1.1 200 OK")       // => "http"
+detectService(9999, "TLS: ...")                   // => "https" (banner fallback)
+detectService(3306, "TCP: ...")                   // => null    (MySQL — not tested)
+```
+
+---
+
+## parseWordlist(filePath)
+
+**Purpose:**
+Reads a credential wordlist file and parses it into an array of `{ user, pass }` objects.
+Each non-comment, non-blank line must be in `username:password` format.
+
+**Parameters:**
+- `filePath` `{string}` — path to the wordlist file (read synchronously)
+
+**Returns:** `{{ user: string, pass: string }[]}` — array of credential pairs
+
+**Notes:**
+- Uses `l.indexOf(":")` to find the first colon, then `slice` on both sides. This correctly handles
+  passwords that contain colons (e.g. `admin:pass:word` → `user="admin"`, `pass="pass:word"`).
+- The file is read synchronously because wordlist parsing happens once at startup, before any async
+  work begins.
+- Lines starting with `#` and blank lines are filtered out so the wordlist can include comments and
+  section separators without producing malformed credential pairs.
+
+**Example:**
+```
+# config/wordlist.txt
+admin:admin
+root:toor
+user:p@ss:w0rd
+```
+```js
+parseWordlist("config/wordlist.txt");
+// => [
+//      { user: "admin", pass: "admin" },
+//      { user: "root",  pass: "toor" },
+//      { user: "user",  pass: "p@ss:w0rd" }
+//    ]
+```
+
+---
+
+## testHost(host, ports, credentials)
+
+**Purpose:**
+Iterates over every open port on a host, identifies testable services, and runs the full wordlist
+against each one using a bounded concurrency pool. Stops testing a port as soon as valid credentials
+are found to minimise login noise and lockout risk.
+
+**Parameters:**
+- `host`        `{string}` — IP address or hostname of the target
+- `ports`       `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_8.9", "80": "TCP: HTTP/1.1 200 OK" }`
+- `credentials` `{{ user: string, pass: string }[]}` — parsed wordlist from `parseWordlist()`
+
+**Returns:** `{Promise<object>}` — map of port string → `{ user, pass, service }` for every successful login; empty object if none succeed
+
+**Notes:**
+- The `cracked` flag is set to `true` the moment a valid credential is found and checked at the
+  start of each task. Tasks that are already queued but have not started yet will exit immediately
+  when they read `cracked = true`. Tasks already in flight are not cancelled — they run to
+  completion but their results are discarded.
+- Port iteration is sequential (a standard `for...of` loop). All concurrency is within a single
+  port's wordlist run. This is intentional: parallelising across ports would multiply the per-port
+  attempt rate by the number of ports, making lockouts more likely.
+- The `\r\x1b[K` escape before logging a hit erases the rolling progress line so the hit message
+  is never visually truncated.
+- Successful results are keyed by port string (e.g. `"22"`) to match the key format in the scan
+  JSON, making the merge at the entry point a direct property assignment.
+
+**Example:**
+```js
+const hits = await testHost("10.0.0.5", { "22": "TCP", "80": "TCP: HTTP/1.1 200 OK" }, creds);
+// => { "22": { user: "root", pass: "toor", service: "SSH" } }
 ```

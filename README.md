@@ -1,6 +1,6 @@
 # RCN Port Scanner
 
-A fast, stealthy TCP/UDP port scanner written in Node.js with decoy IP support, jitter, and parallel scanning.
+A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js with decoy IP support, jitter, and parallel scanning.
 
 ---
 
@@ -18,6 +18,7 @@ A fast, stealthy TCP/UDP port scanner written in Node.js with decoy IP support, 
 | CIDR support | Accepts `/16`–`/32` ranges in target file |
 | Resume-safe output | Results written after each host, survives early exit |
 | Banner grabbing | Captures first line of HTTP response per open port |
+| Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 
 ---
 
@@ -34,12 +35,14 @@ A fast, stealthy TCP/UDP port scanner written in Node.js with decoy IP support, 
 ```bash
 git clone https://github.com/0Day-legalize/JSPortscanner
 cd JSPortscanner
-npm install raw-socket
+npm install
 ```
 
 ---
 
 ## Usage
+
+### Step 1 — Scan for open ports
 
 ```bash
 sudo node src/scanner.js <target> <start-port> <end-port> [output.json]
@@ -61,6 +64,23 @@ sudo node src/scanner.js 10.0.0.0/24 80 443
 sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 ```
 
+### Step 2 — Test credentials against scan results
+
+```bash
+node src/credtest.js <scan.json> <wordlist.txt>
+```
+
+Pass the JSON file produced by the scanner and a wordlist of `username:password` pairs.
+Credentials that succeed are written back into the same JSON file under a `credentials` field.
+
+```bash
+# Test with the default wordlist
+node src/credtest.js scans/scan_1748476800000.json config/wordlist.txt
+
+# Test with a custom wordlist
+node src/credtest.js scans/results.json /path/to/passwords.txt
+```
+
 ---
 
 ## Target File Format
@@ -75,19 +95,39 @@ example.com
 
 ---
 
+## Wordlist Format
+
+Each line must be `username:password`. Lines starting with `#` and blank lines are ignored.
+
+```
+# config/wordlist.txt
+admin:admin
+admin:password
+root:toor
+user:123456
+```
+
+---
+
 ## Output
 
-Results are saved as JSON to `scans/` by default (one file per run, timestamped):
+Results are saved as JSON to `scans/` by default (one file per run, timestamped).
+After running `credtest.js`, successfully cracked ports are merged into the same file:
 
 ```json
 [
   {
     "host": "192.168.1.1",
-    "ports": [
-      { "port": 80,  "proto": "TCP", "state": "open", "banner": "HTTP/1.1 200 OK" },
-      { "port": 443, "proto": "TLS", "state": "open", "banner": null }
-    ],
-    "scannedAt": "2026-05-29T12:00:00.000Z"
+    "ports": {
+      "22":  "TCP: SSH-2.0-OpenSSH_8.9",
+      "80":  "TCP: HTTP/1.1 200 OK",
+      "443": "TLS"
+    },
+    "scannedAt": "2026-05-29T12:00:00.000Z",
+    "credentials": {
+      "22": { "user": "admin", "pass": "password", "service": "SSH" },
+      "80": { "user": "admin", "pass": "admin",    "service": "HTTP" }
+    }
   }
 ]
 ```
@@ -113,13 +153,20 @@ Requires root for raw socket access. The scanner exits with an error if not run 
 ## Project Structure
 
 ```
-JSPortscanner/
+PortScanner/
 ├── src/
-│   └── scanner.js       Main scanner
+│   ├── scanner.js           Port scanner
+│   └── credtest.js          Credential tester
 ├── config/
-│   └── targets.txt      Target list
-├── scans/               Scan output (gitignored)
-├── archive/             Basic TCP/UDP snippets for reference
+│   ├── settings.json        Tunable parameters for scanner and credtest
+│   ├── targets.txt          Default target list (IPs, hostnames, CIDRs)
+│   └── wordlist.txt         Default credential wordlist (username:password)
+├── scans/                   Scan output (gitignored)
+├── docs/
+│   ├── overview.md          Architecture and data flow
+│   ├── functions.md         Per-function reference
+│   ├── obfuscation.md       Stealth technique details
+│   └── constants.md         settings.json field reference
 └── package.json
 ```
 
