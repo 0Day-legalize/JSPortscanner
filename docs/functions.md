@@ -601,11 +601,77 @@ await runPool(tasks, 50, ({ port, data }) => {
 
 ---
 
+## probeSSHFingerprint(host, port)
+
+**Purpose:**
+Connects to an SSH port, reads the server's `MSG_KEXINIT` packet, and returns the advertised
+algorithm lists. Cowrie (via twisted.conch) advertises legacy algorithms that modern OpenSSH
+dropped — this detects it without needing credentials.
+
+**Parameters:**
+- `host` `{string}` — IP address or hostname to connect to
+- `port` `{number}` — SSH port number
+
+**Returns:** `{Promise<{kexAlgos: string[], hostKeyAlgos: string[], encAlgos: string[], macAlgos: string[]}|null>}`
+- Parsed algorithm lists if the server sent a valid `MSG_KEXINIT`
+- `null` on connection failure, timeout, or unexpected message type
+
+**Notes:**
+- The client version string sent on connect is `SSH-2.0-OpenSSH_9.9` to impersonate a real client
+  and avoid leaving an identifiable version string in server logs.
+- The socket times out after 5 000 ms regardless of `socketTimeoutMs` in `settings.json` — the KEX
+  probe is a fixed-duration operation separate from the main scan.
+- Only the client→server encryption and MAC name-lists are extracted; the server→client lists are
+  skipped over to keep offset arithmetic simple. The client→server lists are sufficient for
+  Cowrie fingerprinting because twisted.conch advertises the same algorithms in both directions.
+- `MSG_KEXINIT` payload layout: 1 byte message type (20) + 16 bytes cookie + 10 name-lists. The
+  first four name-lists are kex algorithms, host key types, and encryption algorithms
+  (client→server, then server→client). Only the first three and the client→server MAC list are read.
+
+**Example:**
+```js
+const fp = await probeSSHFingerprint("10.0.0.1", 22);
+if (fp) console.log(fp.kexAlgos);
+// => ["curve25519-sha256", "diffie-hellman-group14-sha1", ...]
+```
+
+---
+
+## checkSSHFingerprint(fp, port)
+
+**Purpose:**
+Checks a parsed SSH KEX fingerprint against the four Cowrie algorithm tell-lists from
+`settings.json` and returns a reason string for each match found.
+
+**Parameters:**
+- `fp`   `{{kexAlgos: string[], hostKeyAlgos: string[], encAlgos: string[], macAlgos: string[]}}` — object returned by `probeSSHFingerprint`
+- `port` `{number}` — SSH port number, included in each reason string for context
+
+**Returns:** `{string[]}` — one reason string per matched algorithm; empty array if nothing suspicious
+
+**Notes:**
+- Each of the four tell-lists (`cowrieKexTells`, `cowrieMacTells`, `cowrieEncTells`,
+  `cowrieHostKeyTells`) is checked independently — a single fingerprint can produce multiple reasons
+  if Cowrie advertises more than one legacy algorithm.
+- The reason strings include both the port number and the specific algorithm name so that
+  multi-port SSH deployments produce unambiguous output.
+
+**Example:**
+```js
+checkSSHFingerprint({ kexAlgos: ["diffie-hellman-group1-sha1"], hostKeyAlgos: [], encAlgos: [], macAlgos: ["hmac-md5"] }, 22);
+// => [
+//      "Cowrie KEX algorithm on port 22: diffie-hellman-group1-sha1",
+//      "Cowrie MAC algorithm on port 22: hmac-md5"
+//    ]
+```
+
+---
+
 ## checkHost(ports)
 
 **Purpose:**
-Inspects the open ports and banners of a single host and returns a list of reasons it may be a
-honeypot. Returns an empty array if nothing suspicious is found.
+Inspects the open ports and banners of a single host against static honeypot indicators and returns
+a list of reason strings. Returns an empty array if nothing suspicious is found.
 
 **Parameters:**
 - `ports` `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" }`
@@ -613,14 +679,18 @@ honeypot. Returns an empty array if nothing suspicious is found.
 **Returns:** `{string[]}` — human-readable reason strings, one per triggered heuristic; empty array if clean
 
 **Notes:**
-- Four independent heuristics are checked in order: known Cowrie banners, bare SSH version strings
-  with no OS suffix, open Telnet (port 23), T-Pot port combination, and suspiciously many open ports.
+- Five static heuristics are applied: known Cowrie SSH banners, SSH banners missing an OS distro
+  suffix, known FTP honeypot banners, open Telnet (port 23), T-Pot port combination, and
+  suspiciously many open ports. Live KEX probing is handled separately in the entry point after
+  this function returns.
 - The Cowrie exact-match check (`COWRIE_SSH_BANNERS`) runs before the bare-suffix check and uses
   `continue` to skip the suffix check on the same port — avoiding a duplicate reason for the same
   port when both would match.
 - `SSH_DISTRO_SUFFIX` is a compiled `RegExp` built at module load from `cfg.sshDistroKeywords`. Real
   distro-packaged OpenSSH always appends an OS string (e.g. `Ubuntu-4ubuntu2.2`) — its absence is
   a reliable Cowrie tell for versions not in the exact-match list.
+- FTP banner matching checks ports whose value starts with `"TCP: 220"` against `FTP_HONEYPOT_BANNERS`
+  using a substring search — covers banners where the scanner captured more text than the list entry.
 - `TPOT_MATCH_MIN` (default 4) means at least 4 ports from the T-Pot set must be open before the
   combination is flagged, reducing false positives on hosts that legitimately run web + SSH + FTP.
 - `SUSPICIOUS_THRESHOLD` (default 6) is intentionally low — real servers rarely expose that many
@@ -631,7 +701,7 @@ honeypot. Returns an empty array if nothing suspicious is found.
 checkHost({ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" });
 // => [
 //      'Cowrie SSH banner on port 22: "SSH-2.0-OpenSSH_5.3"',
-//      "Telnet (port 23) open — almost always a honeypot on modern networks"
+//      "Telnet (port 23) open — almost always a honeypot"
 //    ]
 ```
 
@@ -646,16 +716,20 @@ node src/honeypot.js <scan.json>
 
 **Behaviour:**
 1. Reads the scan JSON file produced by `scanner.js`.
-2. Calls `checkHost()` for every entry.
-3. Writes `{ suspected: true, reasons: [...] }` or `{ suspected: false }` back into each entry
+2. Calls `checkHost()` for every entry to collect static indicator reasons.
+3. For each SSH port found in the entry, calls `probeSSHFingerprint()` to fetch the live KEX
+   advertisement, then `checkSSHFingerprint()` to append any algorithm-based reasons.
+4. Writes `{ suspected: true, reasons: [...] }` or `{ suspected: false }` back into each entry
    under a `honeypot` key.
-4. Saves the updated JSON back to the same file.
-5. Prints a summary count of flagged hosts.
+5. Saves the updated JSON back to the same file.
+6. Prints a summary count of flagged hosts.
 
 **Notes:**
-- All detection thresholds and banner lists are loaded from `config/settings.json` under the
-  `honeypot` key — nothing is hard-coded in the source.
+- All detection thresholds, banner lists, and algorithm tell-lists are loaded from
+  `config/settings.json` under the `honeypot` key — nothing is hard-coded in the source.
 - The file is overwritten in place. Run on a copy if you want to preserve the original scan output.
+- Live KEX probing runs sequentially per host, after the static checks, to avoid opening many
+  simultaneous raw TCP connections during the probe phase.
 
 ---
 

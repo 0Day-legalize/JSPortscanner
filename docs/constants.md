@@ -710,4 +710,110 @@ strings known to appear in honeypot configurations.
 
 ---
 
+### ftpHoneypotBanners
+
+| Property | Value |
+|---|---|
+| Default | Five strings: DiskStation variants, `"220 FTP Server Ready"`, `"220 Cowrie FTP"`, `"220 (vsFTPd 2.0.8)"` |
+| Type | `string[]` |
+| Scope | `checkHost()` — substring match against each port value that starts with `"TCP: 220"` |
+
+**What it controls:**
+FTP banner strings that are known honeypot defaults. A substring match (not exact match) is used
+so partial captures from the scanner still trigger the check.
+
+**Effect of adding an entry:**
+New honeypot FTP banners are detected. Sources: Cowrie FTP component changelogs, T-Pot release
+notes, and community honeypot research.
+
+**Effect of removing an entry:**
+That banner string will no longer be flagged. An FTP port with that banner may still be caught by
+the T-Pot port combination or suspicious port count heuristics.
+
+---
+
+### cowrieKexTells
+
+| Property | Value |
+|---|---|
+| Default | `["diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1"]` |
+| Type | `string[]` |
+| Scope | `checkSSHFingerprint()` — checked against the `kexAlgos` list from a live `MSG_KEXINIT` probe |
+
+**What it controls:**
+KEX algorithm names that Cowrie (via twisted.conch) advertises but modern OpenSSH no longer
+includes. A match produces a `"Cowrie KEX algorithm"` reason string.
+
+**Effect of adding an entry:**
+Additional legacy KEX algorithms are treated as Cowrie tells. Verify against the current
+twisted.conch source before adding — some algorithms may also appear in embedded or
+resource-constrained SSH implementations that are not honeypots.
+
+**Effect of removing an entry:**
+That KEX algorithm is no longer considered suspicious during live probing.
+
+---
+
+### cowrieMacTells
+
+| Property | Value |
+|---|---|
+| Default | `["hmac-md5", "hmac-md5-96"]` |
+| Type | `string[]` |
+| Scope | `checkSSHFingerprint()` — checked against the `macAlgos` (client→server) list |
+
+**What it controls:**
+MAC algorithm names advertised by Cowrie that OpenSSH dropped due to MD5 being cryptographically
+broken. Both `hmac-md5` and `hmac-md5-96` were removed from OpenSSH's default list in 6.7.
+
+**Effect of adding an entry:**
+More MAC algorithms are treated as Cowrie tells.
+
+**Effect of removing an entry:**
+That MAC algorithm is no longer flagged during live KEX probing.
+
+---
+
+### cowrieEncTells
+
+| Property | Value |
+|---|---|
+| Default | `["3des-cbc", "blowfish-cbc", "arcfour256", "arcfour128"]` |
+| Type | `string[]` |
+| Scope | `checkSSHFingerprint()` — checked against the `encAlgos` (client→server) list |
+
+**What it controls:**
+Cipher names advertised by Cowrie that modern OpenSSH removed. `3des-cbc` was dropped in
+OpenSSH 7.4; `blowfish-cbc` and the `arcfour` variants even earlier. Their presence in a server's
+advertisement is a strong Cowrie indicator.
+
+**Effect of adding an entry:**
+More ciphers are treated as Cowrie tells.
+
+**Effect of removing an entry:**
+That cipher is no longer flagged during live KEX probing.
+
+---
+
+### cowrieHostKeyTells
+
+| Property | Value |
+|---|---|
+| Default | `["ssh-dss"]` |
+| Type | `string[]` |
+| Scope | `checkSSHFingerprint()` — checked against the `hostKeyAlgos` list |
+
+**What it controls:**
+Host key algorithm names advertised by Cowrie that modern OpenSSH disabled by default. `ssh-dss`
+(DSA) was disabled in OpenSSH 7.0 due to weak key sizes. A server advertising it is almost
+certainly running Cowrie or very old OpenSSH.
+
+**Effect of adding an entry:**
+Additional legacy host key types are treated as Cowrie tells.
+
+**Effect of removing an entry:**
+That host key type is no longer flagged during live KEX probing.
+
+---
+
 *Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

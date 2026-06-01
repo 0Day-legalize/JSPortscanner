@@ -19,7 +19,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | Resume-safe output | Results written after each host, survives early exit |
 | Banner grabbing | Captures first line of HTTP response per open port |
 | Rotating HTTP headers | Referer, Accept-Language, Cookie, User-Agent, and path rotated per probe |
-| Honeypot detection | Flags Cowrie banners, T-Pot port combos, Telnet, and bare SSH version strings |
+| Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 | SIGINT handler | Ctrl+C flushes partial results before exit |
 
@@ -73,9 +73,11 @@ sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 node src/honeypot.js <scan.json>
 ```
 
-Reads the scan JSON produced by the scanner and flags suspected honeypots based on Cowrie SSH
-banners, T-Pot port combinations, open Telnet, bare SSH version strings (no OS suffix), and
-suspiciously many open ports. Results are written back into the same JSON under a `honeypot` field.
+Reads the scan JSON produced by the scanner and flags suspected honeypots using static checks
+(known Cowrie SSH and FTP banners, T-Pot port combinations, open Telnet, bare SSH version strings
+with no OS suffix, suspiciously many open ports) and live SSH KEX fingerprinting (connects to each
+SSH port, reads `MSG_KEXINIT`, and checks algorithm lists against known Cowrie tells). Results are
+written back into the same JSON under a `honeypot` field.
 
 ```bash
 node src/honeypot.js scans/scan_1748476800000.json
