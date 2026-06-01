@@ -1,229 +1,145 @@
-import net                from "node:net";
-import tls                from "node:tls";
-import dgram              from "node:dgram";
-import fs                 from "node:fs";
-import path               from "node:path";
-import dns                from "node:dns/promises";
-import { createRequire }  from "node:module";
+import net               from "node:net";
+import tls               from "node:tls";
+import dgram             from "node:dgram";
+import fs                from "node:fs";
+import path              from "node:path";
+import dns               from "node:dns/promises";
+import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-// raw-socket requires root — load it optionally so the scanner still works without it
 let raw = null;
-try { raw = require("raw-socket"); } catch { /* no root or package not installed */ }
+try { raw = require("raw-socket"); } catch {}
 
-// ================================================================
-//  CONFIG
-// ================================================================
+// --- config ---
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).scanner;
 
-const MAX_TCP_CONNECTIONS = cfg.maxTCPConnections;
-const MAX_UDP_CONNECTIONS = cfg.maxUDPConnections;
-const MAX_HOST_WORKERS    = cfg.maxHostWorkers;
-const SOCKET_TIMEOUT_MS   = cfg.socketTimeoutMs;
-const JITTER_MIN_MS       = cfg.jitterMinMs;
-const JITTER_MAX_MS       = cfg.jitterMaxMs;
-const DECOY_COUNT         = cfg.decoyCount;
-const PLAINTEXT_PORTS     = new Set(cfg.plaintextPorts);
+const MAX_TCP  = cfg.maxTCPConnections;
+const MAX_UDP  = cfg.maxUDPConnections;
+const MAX_HOST = cfg.maxHostWorkers;
+const TIMEOUT  = cfg.socketTimeoutMs;
+const J_MIN    = cfg.jitterMinMs;
+const J_MAX    = cfg.jitterMaxMs;
+const DECOYS   = cfg.decoyCount;
+const PLAIN    = new Set(cfg.plaintextPorts);
 
-// ================================================================
-//  JITTER
-// ================================================================
+// --- helpers ---
 
-/**
- * Inserts a random inter-probe delay to break the uniform timing signature
- * that IDS systems use to identify automated scanners.
- *
- * @returns {Promise<void>}
- */
+const rand = (n) => Math.floor(Math.random() * n);
+
 function jitter() {
-    const delay = Math.floor(Math.random() * (JITTER_MAX_MS - JITTER_MIN_MS + 1)) + JITTER_MIN_MS;
-    return new Promise((resolve) => setTimeout(resolve, delay));
+    return new Promise(r => setTimeout(r, rand(J_MAX - J_MIN + 1) + J_MIN));
 }
 
-// ================================================================
-//  DECOY IPs
-// ================================================================
+function randomSourcePort() {
+    return rand(65535 - 1024 + 1) + 1024;
+}
 
-/**
- * Returns a random RFC1918 private IP address.
- * Private addresses are non-routable, so decoy packets appear to originate
- * from inside the target's own network and can never be traced to us.
- *
- * @returns {string} Dotted-decimal private IP string
- */
+function shufflePorts(first, last) {
+    const list = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+    for (let i = list.length - 1; i > 0; i--) {
+        const j = rand(i + 1);
+        [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+}
+
+async function runPool(tasks, limit, onDone) {
+    let i = 0;
+    const worker = async () => {
+        while (i < tasks.length) onDone(await tasks[i++]());
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+}
+
+// --- decoys ---
+
 function randomPrivateIP() {
-    const rand = (n) => Math.floor(Math.random() * n);
     const pick = rand(3);
     if (pick === 0) return `10.${rand(256)}.${rand(256)}.${1 + rand(253)}`;
     if (pick === 1) return `172.${16 + rand(16)}.${rand(256)}.${1 + rand(253)}`;
     return `192.168.${rand(256)}.${1 + rand(253)}`;
 }
 
-/**
- * Calculates the one's complement checksum required by IP and TCP headers (RFC 791 §3.1).
- *
- * @param {Buffer} buf - Raw bytes to checksum
- * @returns {number} 16-bit checksum value
- */
-function oneComplementChecksum(buf) {
+// one's complement checksum per RFC 791
+function checksum(buf) {
     let sum = 0;
-    for (let i = 0; i < buf.length; i += 2) {
+    for (let i = 0; i < buf.length; i += 2)
         sum += (i + 1 < buf.length) ? buf.readUInt16BE(i) : (buf[i] << 8);
-    }
     while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
     return (~sum) & 0xffff;
 }
 
-/**
- * Builds a raw IP + TCP SYN packet with a spoofed source IP.
- *
- * @param {string} srcIP   - Spoofed source IP address (private range)
- * @param {string} dstIP   - Real destination IP address
- * @param {number} srcPort - Source port written into the TCP header
- * @param {number} dstPort - Target destination port
- * @returns {Buffer} 40-byte packet (20-byte IP header + 20-byte TCP header) ready to send
- */
 function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
-    const packet = Buffer.alloc(40);
-    const src    = srcIP.split(".").map(Number);
-    const dst    = dstIP.split(".").map(Number);
+    const pkt = Buffer.alloc(40);
+    const src = srcIP.split(".").map(Number);
+    const dst = dstIP.split(".").map(Number);
 
-    // ── IP header (bytes 0–19) ────────────────────────────────────────────────
-    packet[0] = 0x45;                                                // version=4, IHL=5
-    packet[1] = 0x00;                                                // DSCP/ECN
-    packet.writeUInt16BE(40, 2);                                     // total length
-    packet.writeUInt16BE(Math.floor(Math.random() * 0xffff), 4);    // random ID
-    packet.writeUInt16BE(0x4000, 6);                                 // DF flag, no fragment
-    packet[8]  = 64 + Math.floor(Math.random() * 64);               // TTL 64–127
-    packet[9]  = 6;                                                  // protocol = TCP
-    packet.writeUInt16BE(0, 10);                                     // checksum placeholder
-    packet[12] = src[0]; packet[13] = src[1]; packet[14] = src[2]; packet[15] = src[3];
-    packet[16] = dst[0]; packet[17] = dst[1]; packet[18] = dst[2]; packet[19] = dst[3];
-    packet.writeUInt16BE(oneComplementChecksum(packet.slice(0, 20)), 10); // IP checksum
+    pkt[0] = 0x45; pkt[1] = 0x00;
+    pkt.writeUInt16BE(40, 2);
+    pkt.writeUInt16BE(rand(0xffff), 4);
+    pkt.writeUInt16BE(0x4000, 6);
+    pkt[8] = 64 + rand(64); pkt[9] = 6;
+    pkt.writeUInt16BE(0, 10);
+    pkt[12]=src[0]; pkt[13]=src[1]; pkt[14]=src[2]; pkt[15]=src[3];
+    pkt[16]=dst[0]; pkt[17]=dst[1]; pkt[18]=dst[2]; pkt[19]=dst[3];
+    pkt.writeUInt16BE(checksum(pkt.slice(0, 20)), 10);
 
-    // ── TCP header (bytes 20–39) ──────────────────────────────────────────────
-    packet.writeUInt16BE(srcPort, 20);                               // source port
-    packet.writeUInt16BE(dstPort, 22);                               // dest port
-    packet.writeUInt32BE(Math.floor(Math.random() * 0xffffffff) >>> 0, 24); // random seq
-    packet.writeUInt32BE(0, 28);                                     // ack = 0
-    packet[32] = 0x50;                                               // data offset = 5
-    packet[33] = 0x02;                                               // SYN flag
-    packet.writeUInt16BE(Math.floor(Math.random() * 0xffff) | 0x1000, 34); // window size
-    packet.writeUInt16BE(0, 36);                                     // checksum placeholder
-    packet.writeUInt16BE(0, 38);                                     // urgent pointer
+    pkt.writeUInt16BE(srcPort, 20);
+    pkt.writeUInt16BE(dstPort, 22);
+    pkt.writeUInt32BE(rand(0xffffffff) >>> 0, 24);
+    pkt.writeUInt32BE(0, 28);
+    pkt[32] = 0x50; pkt[33] = 0x02;
+    pkt.writeUInt16BE(rand(0xffff) | 0x1000, 34);
+    pkt.writeUInt16BE(0, 36); pkt.writeUInt16BE(0, 38);
 
-    // TCP checksum needs a pseudo-header: src + dst + 0x00 + proto(6) + tcp_len(20)
     const pseudo = Buffer.alloc(12);
-    pseudo[0] = src[0]; pseudo[1] = src[1]; pseudo[2] = src[2]; pseudo[3] = src[3];
-    pseudo[4] = dst[0]; pseudo[5] = dst[1]; pseudo[6] = dst[2]; pseudo[7] = dst[3];
-    pseudo[8]  = 0;
-    pseudo[9]  = 6;
+    pseudo[0]=src[0]; pseudo[1]=src[1]; pseudo[2]=src[2]; pseudo[3]=src[3];
+    pseudo[4]=dst[0]; pseudo[5]=dst[1]; pseudo[6]=dst[2]; pseudo[7]=dst[3];
+    pseudo[8]=0; pseudo[9]=6;
     pseudo.writeUInt16BE(20, 10);
-    packet.writeUInt16BE(oneComplementChecksum(Buffer.concat([pseudo, packet.slice(20)])), 36);
+    pkt.writeUInt16BE(checksum(Buffer.concat([pseudo, pkt.slice(20)])), 36);
 
-    return packet;
+    return pkt;
 }
 
-/** Lazily created raw socket — reused across all decoy sends */
 let rawSocket = null;
 
-/**
- * Returns the shared raw socket, creating it lazily on first call.
- * A single socket is reused across all decoy sends to avoid per-packet
- * open/close overhead and kernel resource churn.
- *
- * @returns {object|null} Raw socket instance, or null if unavailable
- */
 function getDecoySocket() {
     if (rawSocket) return rawSocket;
     if (!raw) return null;
     try {
         rawSocket = raw.createSocket({ protocol: raw.Protocol.None, addressFamily: raw.AddressFamily.IPv4 });
-        // IP_HDRINCL tells the kernel we are providing the full IP header ourselves
         rawSocket.setOption(raw.SocketLevel.IPPROTO_IP, raw.SocketOption.IP_HDRINCL, Buffer.from([1, 0, 0, 0]), 4);
         return rawSocket;
-    } catch {
-        return null;
-    }
+    } catch { return null; }
 }
 
-/**
- * Fires DECOY_COUNT spoofed TCP SYN packets at dstIP:dstPort, each from a
- * random private source IP, before the real probe goes out.
- * Silently does nothing if raw-socket is unavailable or process is not root.
- *
- * @param {string} dstIP   - Resolved destination IP
- * @param {number} dstPort - Target port
- */
 function sendDecoys(dstIP, dstPort) {
     const sock = getDecoySocket();
     if (!sock) return;
-    for (let i = 0; i < DECOY_COUNT; i++) {
-        const packet = buildSynPacket(randomPrivateIP(), dstIP, randomSourcePort(), dstPort);
-        sock.send(packet, 0, packet.length, dstIP, () => {});
+    for (let i = 0; i < DECOYS; i++) {
+        const pkt = buildSynPacket(randomPrivateIP(), dstIP, randomSourcePort(), dstPort);
+        sock.send(pkt, 0, pkt.length, dstIP, () => {});
     }
 }
 
-// ================================================================
-//  TCP / TLS
-// ================================================================
+// --- tcp / tls ---
 
-/**
- * Returns a random ephemeral source port (1024–65535).
- * Binding each connection to a different local port breaks the sequential
- * source-port pattern that IDS systems use to fingerprint scanners.
- *
- * @returns {number} Random port number between 1024 and 65535
- */
-function randomSourcePort() {
-    return Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024;
-}
-
-/**
- * Builds a port list from firstPort to lastPort then randomly shuffles it
- * so the scan order is unpredictable and harder to detect.
- *
- * @param {number} firstPort - The lowest port number to include (e.g. 1)
- * @param {number} lastPort  - The highest port number to include (e.g. 1024)
- * @returns {number[]} Shuffled array of port numbers
- */
-function shufflePorts(firstPort, lastPort) {
-    const portList = [];
-    for (let port = firstPort; port <= lastPort; port++) portList.push(port);
-
-    // Fisher-Yates shuffle: walk backwards, swap each element with a random earlier one
-    for (let index = portList.length - 1; index > 0; index--) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
-        [portList[index], portList[swapIndex]] = [portList[swapIndex], portList[index]];
-    }
-    return portList;
-}
-
-/**
- * Attempts a single TCP or TLS connection to host:port and returns any response data.
- * Sends a basic HTTP HEAD request once connected to try to grab a banner.
- *
- * @param {string}  host   - IP address or hostname to connect to
- * @param {number}  port   - Port number to connect to
- * @param {boolean} useTLS - If true, wraps the connection in TLS (HTTPS-style)
- * @returns {Promise<string|null>} Response text if connected, null if connection failed
- */
 function tryTCPConnect(host, port, useTLS, hostname) {
     return new Promise((resolve) => {
         const socket = useTLS
             ? tls.connect({ host, port, rejectUnauthorized: false, servername: hostname })
             : net.createConnection({ host, port });
 
-        let responseData = "";
-        let isConnected  = false;
+        let data = "";
+        let connected = false;
 
-        socket.setTimeout(SOCKET_TIMEOUT_MS);
+        socket.setTimeout(TIMEOUT);
 
         socket.on(useTLS ? "secureConnect" : "connect", () => {
-            isConnected = true;
-            // HTTP/1.1 with realistic browser headers blends in as normal traffic
+            connected = true;
             socket.write(
                 `HEAD / HTTP/1.1\r\n` +
                 `Host: ${hostname}\r\n` +
@@ -235,192 +151,110 @@ function tryTCPConnect(host, port, useTLS, hostname) {
             );
         });
 
-        socket.on("data",    (chunk) => { responseData += chunk.toString("utf8"); });
-
-        // Destroy triggers the close event so the promise always resolves
+        socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });
         socket.on("timeout", ()      => socket.destroy());
-
-        // Connection refused or reset before we connected — port is closed
-        socket.on("error",   ()      => { if (!isConnected) resolve(null); });
-
-        socket.on("close",   ()      => resolve(isConnected ? responseData : null));
+        socket.on("error",   ()      => { if (!connected) resolve(null); });
+        socket.on("close",   ()      => resolve(connected ? data : null));
     });
 }
 
-/**
- * Scans a single TCP port by trying TLS first, then plain TCP.
- * TLS is tried first because a plain TCP attempt on a TLS port gives no useful data.
- *
- * @param {string} host - IP address or hostname to scan
- * @param {number} port - Port number to scan
- * @returns {Promise<{proto: string, port: number, data: string|null}>}
- */
 async function scanTCPPort(host, port, hostname = host) {
-    // Skip TLS entirely for ports known to speak plaintext
-    if (PLAINTEXT_PORTS.has(port)) {
-        const response = await tryTCPConnect(host, port, false, hostname);
-        return { proto: "TCP", port, data: response };
+    if (PLAIN.has(port)) {
+        const res = await tryTCPConnect(host, port, false, hostname);
+        return { proto: "TCP", port, data: res };
     }
 
-    const tlsResponse = await tryTCPConnect(host, port, true, hostname);
+    const tlsRes = await tryTCPConnect(host, port, true, hostname);
+    const tcpRes = tlsRes === null ? await tryTCPConnect(host, port, false, hostname) : null;
+    const res    = tlsRes ?? tcpRes;
 
-    // Only try plain TCP if TLS got nothing — avoids a double connection on TLS ports
-    const tcpResponse = tlsResponse === null ? await tryTCPConnect(host, port, false, hostname) : null;
-
-    const response = tlsResponse ?? tcpResponse;
-    return { proto: tlsResponse === null ? "TCP" : "TLS", port, data: response };
+    return { proto: tlsRes === null ? "TCP" : "TLS", port, data: res };
 }
 
-// ================================================================
-//  UDP
-// ================================================================
+// --- udp ---
 
-/**
- * Sends an empty UDP packet to host:port and waits for a response.
- * UDP has no handshake so silence usually means open|filtered (we can't tell which).
- * An ICMP port-unreachable error means the port is definitely closed.
- *
- * @param {string} host - IP address to probe
- * @param {number} port - UDP port number to probe
- * @returns {Promise<string|null>}
- *   - Response string if the service replied
- *   - "OPEN|FILTERED" if no reply within the timeout
- *   - null if the port is closed (ICMP unreachable)
- *   - "ERROR: ..." for unexpected socket errors
- */
 function tryUDPConnect(host, port) {
     return new Promise((resolve) => {
-        const socket   = dgram.createSocket("udp4");
-        let isFinished = false;
+        const socket = dgram.createSocket("udp4");
+        let done = false;
 
-        // Multiple events (message + close, or error + close) can fire for one probe
+        // guard against multiple events resolving the same promise
         function finish(result) {
-            if (isFinished) return;
-            isFinished = true;
+            if (done) return;
+            done = true;
             socket.close();
             resolve(result);
         }
 
-        const timer = setTimeout(() => finish("OPEN|FILTERED"), SOCKET_TIMEOUT_MS);
+        const timer = setTimeout(() => finish("OPEN|FILTERED"), TIMEOUT);
 
         socket.on("message", (msg) => { clearTimeout(timer); finish(msg.toString("utf8")); });
-
         socket.on("error", (err) => {
             clearTimeout(timer);
-            // ECONNREFUSED means the OS got an ICMP port-unreachable — port is closed
+            // ECONNREFUSED = ICMP port unreachable = definitely closed
             finish(err.code === "ECONNREFUSED" ? null : `ERROR: ${err.message}`);
         });
 
-        const emptyPayload = Buffer.alloc(0);
-        socket.send(emptyPayload, port, host, (err) => { if (err) { clearTimeout(timer); finish(null); } });
+        socket.send(Buffer.alloc(0), port, host, (err) => {
+            if (err) { clearTimeout(timer); finish(null); }
+        });
     });
 }
 
-/**
- * Wraps tryUDPConnect into the same shape as scanTCPPort for uniform handling.
- *
- * @param {string} host - IP address to scan
- * @param {number} port - UDP port number to scan
- * @returns {Promise<{proto: string, port: number, data: string|null}>}
- */
 async function scanUDPPort(host, port) {
-    const response = await tryUDPConnect(host, port);
-    return { proto: "UDP", port, data: response };
+    const res = await tryUDPConnect(host, port);
+    return { proto: "UDP", port, data: res };
 }
 
-// ================================================================
-//  CONCURRENCY POOL
-// ================================================================
+// --- host scan ---
 
-/**
- * Runs an array of async tasks with a cap on how many run at the same time.
- * Think of it as a worker queue: workerLimit workers each grab the next task
- * as soon as they finish the previous one.
- *
- * @param {Array<() => Promise<any>>} taskList    - Array of zero-argument async functions
- * @param {number}                    workerLimit - Max tasks running simultaneously
- * @param {(result: any) => void}     onTaskDone  - Called with each task's return value
- * @returns {Promise<void>} Resolves when every task has finished
- */
-async function runPool(taskList, workerLimit, onTaskDone) {
-    let taskIndex = 0;
-
-    async function worker() {
-        while (taskIndex < taskList.length) {
-            const result = await taskList[taskIndex++]();
-            onTaskDone(result);
-        }
-    }
-
-    await Promise.all(Array.from({ length: Math.min(workerLimit, taskList.length) }, worker));
-}
-
-// ================================================================
-//  HOST SCANNER
-// ================================================================
-
-/**
- * Scans all ports in the given range on a single host, running TCP and UDP in parallel.
- * Ports are shuffled before scanning to avoid sequential-scan detection.
- * Only open ports are kept in the results.
- *
- * @param {string} host      - IP address or hostname to scan
- * @param {number} firstPort - Start of the port range (inclusive)
- * @param {number} lastPort  - End of the port range (inclusive)
- * @returns {Promise<{host: string, ports: Array, scannedAt: string}>}
- */
 async function scanHost(host, firstPort, lastPort) {
     const portList  = shufflePorts(firstPort, lastPort);
     const openPorts = [];
 
-    // Resolve hostname to IP once — raw socket needs a dotted-decimal address
     let resolvedIP = null;
     try {
         resolvedIP = /^\d+\.\d+\.\d+\.\d+$/.test(host)
             ? host
             : (await dns.lookup(host)).address;
-    } catch { /* hostname unresolvable — decoys disabled for this host */ }
+    } catch {}
 
-    // Reverse DNS lookup — use the hostname in HTTP Host header so traffic
-    // looks like normal browsing rather than a direct IP probe
-    let resolvedHostname = host;
+    // use PTR hostname in HTTP Host header so traffic looks like browsing, not scanning
+    let hostname = host;
     try {
         if (resolvedIP) {
-            const hostnames = await dns.reverse(resolvedIP);
-            if (hostnames.length > 0) resolvedHostname = hostnames[0];
+            const ptrs = await dns.reverse(resolvedIP);
+            if (ptrs.length > 0) hostname = ptrs[0];
         }
-    } catch { /* no PTR record — fall back to original host value */ }
+    } catch {}
 
-    /**
-     * Receives a single port result and keeps it only if the port is open.
-     *
-     * @param {{proto: string, port: number, data: string|null}} result
-     */
-    function onPortResult({ proto, port, data }) {
-        // Null means closed; "OPEN|FILTERED" means UDP silence — skip both
-        const isOpen = data !== null && data !== "OPEN|FILTERED";
-        if (!isOpen) return;
+    function onResult({ proto, port, data }) {
+        if (data === null || data === "OPEN|FILTERED") return;
 
-        const banner = typeof data === "string" && data.trim() ? data.trim().split(/\r?\n/) : null;
+        const banner = typeof data === "string" && data.trim()
+            ? data.trim().split(/\r?\n/)
+            : null;
 
-        // \r\x1b[K erases the rolling progress line before printing the permanent hit line
         process.stdout.write("\r\x1b[K");
-        console.log(`  OPEN     ${host}:${port} [${proto}]${banner ? " " + banner[0] : ""}`);
+        console.log(`  OPEN  ${host}:${port} [${proto}]${banner ? "  " + banner[0] : ""}`);
 
-        const portValue = banner ? `${proto}: ${banner[0]}` : proto;
-        openPorts.push({ port, value: portValue });
+        openPorts.push({ port, value: banner ? `${proto}: ${banner[0]}` : proto });
     }
 
     const tcpTasks = portList.map((port) => async () => {
         await jitter();
         if (resolvedIP) sendDecoys(resolvedIP, port);
-        return scanTCPPort(host, port, resolvedHostname);
+        return scanTCPPort(host, port, hostname);
     });
-    const udpTasks = portList.map((port) => async () => { await jitter(); return scanUDPPort(host, port); });
+
+    const udpTasks = portList.map((port) => async () => {
+        await jitter();
+        return scanUDPPort(host, port);
+    });
 
     await Promise.all([
-        runPool(tcpTasks, MAX_TCP_CONNECTIONS, onPortResult),
-        runPool(udpTasks, MAX_UDP_CONNECTIONS, onPortResult),
+        runPool(tcpTasks, MAX_TCP, onResult),
+        runPool(udpTasks, MAX_UDP, onResult),
     ]);
 
     openPorts.sort((a, b) => a.port - b.port);
@@ -431,119 +265,80 @@ async function scanHost(host, firstPort, lastPort) {
     return { host, ports, scannedAt: new Date().toISOString() };
 }
 
-// ================================================================
-//  TARGET PARSING
-// ================================================================
+// --- target parsing ---
 
-/**
- * Expands a CIDR block (e.g. 192.168.1.0/24) into individual host IP strings.
- * Skips the network address (.0) and broadcast address (.255).
- * Supports prefix lengths from /16 to /32.
- *
- * @param {string} cidr - CIDR notation string, e.g. "10.0.0.0/24"
- * @returns {string[]} Array of individual IP address strings
- */
 function expandCIDR(cidr) {
-    const [baseIP, prefixLength] = cidr.split("/");
-    const bits = Number.parseInt(prefixLength, 10);
+    const [baseIP, prefix] = cidr.split("/");
+    const bits = Number.parseInt(prefix, 10);
     if (bits < 16 || bits > 32) throw new Error(`CIDR /${bits} not supported (use /16–/32)`);
 
-    // Convert the dotted-decimal base IP into a single 32-bit integer
-    const octets  = baseIP.split(".").map(Number);
-    const baseInt = (octets[0] << 24 | octets[1] << 16 | octets[2] << 8 | octets[3]) >>> 0;
+    const oct = baseIP.split(".").map(Number);
+    const base = (oct[0] << 24 | oct[1] << 16 | oct[2] << 8 | oct[3]) >>> 0;
+    const count = 1 << (32 - bits);
+    const out = [];
 
-    // Total addresses in the block = 2^(32 - prefix). Subtract 2 for network + broadcast.
-    const hostCount = 1 << (32 - bits);
-    const hostList  = [];
-
-    for (let offset = 1; offset < hostCount - 1; offset++) {
-        const ipInt = (baseInt + offset) >>> 0;
-        hostList.push(`${ipInt >>> 24}.${(ipInt >>> 16) & 0xff}.${(ipInt >>> 8) & 0xff}.${ipInt & 0xff}`);
+    for (let i = 1; i < count - 1; i++) {
+        const ip = (base + i) >>> 0;
+        out.push(`${ip >>> 24}.${(ip >>> 16) & 0xff}.${(ip >>> 8) & 0xff}.${ip & 0xff}`);
     }
-    return hostList;
+    return out;
 }
 
-/**
- * Reads a target file and returns a flat list of hosts to scan.
- * Each line can be a plain IP, a hostname, or a CIDR block.
- * Lines starting with # and blank lines are ignored.
- *
- * @param {string} filePath - Path to the targets file
- * @returns {string[]} Flat array of IP/hostname strings ready to scan
- */
 function parseTargetFile(filePath) {
-    const fileContent = fs.readFileSync(filePath, "utf8");
-    const hostList    = [];
-
-    for (const rawLine of fileContent.split("\n")) {
-        const line = rawLine.trim();
+    const hosts = [];
+    for (const raw of fs.readFileSync(filePath, "utf8").split("\n")) {
+        const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
-
-        if (line.includes("/")) {
-            hostList.push(...expandCIDR(line));
-        } else {
-            hostList.push(line);
-        }
+        line.includes("/") ? hosts.push(...expandCIDR(line)) : hosts.push(line);
     }
-    return hostList;
+    return hosts;
 }
 
-// ================================================================
-//  ENTRY POINT
-// ================================================================
+// --- main ---
 
 if (process.getuid() !== 0) {
-    console.error("Error: must be run as root (sudo) for raw socket decoy support.");
+    console.error("must be run as root (sudo)");
     process.exit(1);
 }
 
-// ── CLI argument parsing ──────────────────────────────────────────
 const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
 
 if (!targetFile || !firstPortArg || !lastPortArg) {
-    console.error("Usage: sudo node src/scanner.js <target> <start-port> <end-port> [output.json]");
-    console.error("Example: sudo node src/scanner.js config/targets.txt 1 1024");
+    console.error("usage: sudo node src/scanner.js <target> <start-port> <end-port> [output.json]");
     process.exit(1);
 }
 
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
-
-// Timestamp in the default filename ensures concurrent runs never clobber each other
 const outputPath = outputFile || `scans/scan_${Date.now()}.json`;
 
-// Create scans/ folder if it doesn't exist
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-// ── Target resolution ─────────────────────────────────────────────
-const hostList = fs.existsSync(targetFile)
+const hosts = fs.existsSync(targetFile)
     ? parseTargetFile(targetFile)
     : targetFile.includes("/") ? expandCIDR(targetFile) : [targetFile];
 
-console.log(`Scanning ${hostList.length} host(s), ports ${firstPort}–${lastPort}\n`);
+console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
-const scanResults  = [];
-let hostsCompleted = 0;
+const results = [];
+let done = 0;
 
-const hostTasks = hostList.map((host) => async () => {
-    const hostResult = await scanHost(host, firstPort, lastPort);
+const tasks = hosts.map((host) => async () => {
+    const result = await scanHost(host, firstPort, lastPort);
+    const count  = Object.keys(result.ports).length;
 
-    const portCount = Object.keys(hostResult.ports).length;
-    if (portCount > 0) scanResults.push(hostResult);
+    if (count > 0) results.push(result);
+    done++;
 
-    hostsCompleted++;
-
-    if (portCount > 0) {
-        console.log(`[${hostsCompleted}/${hostList.length}] ${host} — ${portCount} open`);
+    if (count > 0) {
+        console.log(`[${done}/${hosts.length}] ${host} — ${count} open`);
     } else {
-        // Reuse one terminal line for quiet hosts so the output isn't flooded
-        process.stdout.write(`\r[${hostsCompleted}/${hostList.length}] scanning...`);
+        process.stdout.write(`\r[${done}/${hosts.length}] scanning...`);
     }
 
-    // Flush after every host so partial results survive a SIGINT or crash
-    fs.writeFileSync(outputPath, JSON.stringify(scanResults, null, 2), "utf8");
+    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
 });
 
-await runPool(hostTasks, MAX_HOST_WORKERS, () => {});
+await runPool(tasks, MAX_HOST, () => {});
 
-console.log(`\nResults saved to ${path.resolve(outputPath)}`);
+console.log(`\nsaved to ${path.resolve(outputPath)}`);
