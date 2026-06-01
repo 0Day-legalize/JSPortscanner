@@ -15,7 +15,28 @@
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
     ],
-    "httpPaths": ["/", "/index.html", "/robots.txt", "/favicon.ico", "/sitemap.xml"]
+    "httpPaths": ["/", "/index.html", "/robots.txt", "/favicon.ico", "/sitemap.xml"],
+    "referers": [
+      "https://www.google.com/",
+      "https://www.bing.com/",
+      "https://duckduckgo.com/",
+      "https://www.reddit.com/",
+      "https://t.co/"
+    ],
+    "acceptLanguages": [
+      "en-US,en;q=0.9",
+      "de-DE,de;q=0.9,en;q=0.8",
+      "fr-FR,fr;q=0.9,en;q=0.8",
+      "nl-NL,nl;q=0.9,en;q=0.8",
+      "es-ES,es;q=0.9,en;q=0.8",
+      "pl-PL,pl;q=0.9,en;q=0.8"
+    ],
+    "fakeCookies": [
+      "session=a3f8b2c1d4e5f6a7; _ga=GA1.2.123456789.1700000000",
+      "_gid=GA1.2.987654321.1700000000; visited=1",
+      "lang=en; tz=Europe%2FBerlin",
+      "consent=1; _fbp=fb.1.1700000000.123456789"
+    ]
   },
   "honeypot": {
     "suspiciousPortThreshold": 6,

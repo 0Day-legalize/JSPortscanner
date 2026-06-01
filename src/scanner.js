@@ -26,9 +26,15 @@ const DECOYS    = cfg.decoyCount;
 const PLAIN     = new Set(cfg.plaintextPorts);
 const UA_LIST   = cfg.userAgents;
 const HTTP_PATHS = cfg.httpPaths;
+const REFERERS   = cfg.referers;
+const LANGUAGES  = cfg.acceptLanguages;
+const COOKIES    = cfg.fakeCookies;
 
-const randomUA   = () => UA_LIST[rand(UA_LIST.length)];
-const randomPath = () => HTTP_PATHS[rand(HTTP_PATHS.length)];
+const randomUA       = () => UA_LIST[rand(UA_LIST.length)];
+const randomPath     = () => HTTP_PATHS[rand(HTTP_PATHS.length)];
+const randomReferer  = () => REFERERS[rand(REFERERS.length)];
+const randomLanguage = () => LANGUAGES[rand(LANGUAGES.length)];
+const randomCookie   = () => COOKIES[rand(COOKIES.length)];
 
 // --- ʕ•ᴥ•ʔ obfuscation helpers ʕ•ᴥ•ʔ ---
 
@@ -152,8 +158,10 @@ function tryTCPConnect(host, port, useTLS, hostname) {
                 `Host: ${hostname}\r\n` +
                 `User-Agent: ${randomUA()}\r\n` +
                 `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
-                `Accept-Language: en-US,en;q=0.5\r\n` +
+                `Accept-Language: ${randomLanguage()}\r\n` +
                 `Accept-Encoding: gzip, deflate\r\n` +
+                `Referer: ${randomReferer()}\r\n` +
+                `Cookie: ${randomCookie()}\r\n` +
                 `Connection: close\r\n\r\n`
             );
         });
