@@ -129,8 +129,10 @@ function sendDecoys(dstIP, dstPort) {
 
 function tryTCPConnect(host, port, useTLS, hostname) {
     return new Promise((resolve) => {
+        // servername must be a hostname, not an IP — skip it if no PTR record was found
+        const isIP = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
         const socket = useTLS
-            ? tls.connect({ host, port, rejectUnauthorized: false, servername: hostname })
+            ? tls.connect({ host, port, rejectUnauthorized: false, ...(isIP ? {} : { servername: hostname }) })
             : net.createConnection({ host, port });
 
         let data = "";
