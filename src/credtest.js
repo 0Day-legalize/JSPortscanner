@@ -18,43 +18,21 @@ try { ftpLib = require("basic-ftp"); }               catch { console.warn("[warn
 try { ({ default: axios } = await import("axios")); } catch { console.warn("[warn] axios not installed — HTTP testing disabled"); }
 
 // ================================================================
-//  CONSTANTS
+//  CONFIG
 // ================================================================
 
-/** Max concurrent credential attempts — kept low to avoid triggering lockouts */
-const CRED_CONCURRENCY = 3;
+const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).credtest;
 
-/** Minimum jitter (ms) between attempts — higher than scanner to avoid detection */
-const JITTER_MIN_MS = 500;
-
-/** Maximum jitter (ms) between attempts */
-const JITTER_MAX_MS = 2000;
-
-/** Socket/connection timeout per attempt */
-const TIMEOUT_MS = 5000;
-
-/** Ports treated as SSH */
-const SSH_PORTS = new Set([22, 2222]);
-
-/** Ports treated as FTP */
-const FTP_PORTS = new Set([21]);
-
-/** Ports treated as plain HTTP */
-const HTTP_PORTS = new Set([80, 8080, 8000, 8888]);
-
-/** Ports treated as HTTPS */
-const HTTPS_PORTS = new Set([443, 8443]);
-
-/** Common login endpoints to try for HTTP/HTTPS */
-const HTTP_ENDPOINTS = ["/login", "/admin", "/wp-login.php", "/admin/login", "/signin", "/user/login"];
-
-/** Common form field name combinations for HTTP login forms */
-const HTTP_FIELDS = [
-    { user: "username", pass: "password" },
-    { user: "email",    pass: "password" },
-    { user: "user",     pass: "pass"     },
-    { user: "login",    pass: "password" },
-];
+const CRED_CONCURRENCY = cfg.concurrency;
+const JITTER_MIN_MS    = cfg.jitterMinMs;
+const JITTER_MAX_MS    = cfg.jitterMaxMs;
+const TIMEOUT_MS       = cfg.timeoutMs;
+const SSH_PORTS        = new Set(cfg.sshPorts);
+const FTP_PORTS        = new Set(cfg.ftpPorts);
+const HTTP_PORTS       = new Set(cfg.httpPorts);
+const HTTPS_PORTS      = new Set(cfg.httpsPorts);
+const HTTP_ENDPOINTS   = cfg.httpEndpoints;
+const HTTP_FIELDS      = cfg.httpFields;
 
 // ================================================================
 //  JITTER

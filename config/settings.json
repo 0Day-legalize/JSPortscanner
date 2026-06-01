@@ -1,0 +1,29 @@
+{
+  "scanner": {
+    "maxTCPConnections": 50,
+    "maxUDPConnections": 20,
+    "maxHostWorkers": 50,
+    "socketTimeoutMs": 2000,
+    "jitterMinMs": 10,
+    "jitterMaxMs": 250,
+    "decoyCount": 4,
+    "plaintextPorts": [21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]
+  },
+  "credtest": {
+    "concurrency": 3,
+    "jitterMinMs": 500,
+    "jitterMaxMs": 2000,
+    "timeoutMs": 5000,
+    "sshPorts": [22, 2222],
+    "ftpPorts": [21],
+    "httpPorts": [80, 8080, 8000, 8888],
+    "httpsPorts": [443, 8443],
+    "httpEndpoints": ["/login", "/admin", "/wp-login.php", "/admin/login", "/signin", "/user/login"],
+    "httpFields": [
+      { "user": "username", "pass": "password" },
+      { "user": "email",    "pass": "password" },
+      { "user": "user",     "pass": "pass"     },
+      { "user": "login",    "pass": "password" }
+    ]
+  }
+}

@@ -13,32 +13,19 @@ let raw = null;
 try { raw = require("raw-socket"); } catch { /* no root or package not installed */ }
 
 // ================================================================
-//  CONSTANTS
+//  CONFIG
 // ================================================================
 
-/** Maximum number of TCP connections open at the same time per host */
-const MAX_TCP_CONNECTIONS = 50;
+const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).scanner;
 
-/** Maximum number of UDP connections open at the same time per host */
-const MAX_UDP_CONNECTIONS = 20;
-
-/** How many hosts to scan in parallel */
-const MAX_HOST_WORKERS = 50;
-
-/** How long (ms) to wait for a socket response before giving up */
-const SOCKET_TIMEOUT_MS = 2000;
-
-/** Minimum random delay (ms) injected before each port probe */
-const JITTER_MIN_MS = 10;
-
-/** Maximum random delay (ms) injected before each port probe */
-const JITTER_MAX_MS = 250;
-
-/** Ports that never speak TLS natively — skip the TLS probe and go straight to plain TCP */
-const PLAINTEXT_PORTS = new Set([21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]);
-
-/** Number of spoofed decoy SYN packets sent before each real TCP probe */
-const DECOY_COUNT = 4;
+const MAX_TCP_CONNECTIONS = cfg.maxTCPConnections;
+const MAX_UDP_CONNECTIONS = cfg.maxUDPConnections;
+const MAX_HOST_WORKERS    = cfg.maxHostWorkers;
+const SOCKET_TIMEOUT_MS   = cfg.socketTimeoutMs;
+const JITTER_MIN_MS       = cfg.jitterMinMs;
+const JITTER_MAX_MS       = cfg.jitterMaxMs;
+const DECOY_COUNT         = cfg.decoyCount;
+const PLAINTEXT_PORTS     = new Set(cfg.plaintextPorts);
 
 // ================================================================
 //  JITTER
