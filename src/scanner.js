@@ -72,33 +72,43 @@ function checksum(buf) {
 }
 
 function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
+    // 40 bytes total: 20 IP header + 20 TCP header, no payload
     const pkt = Buffer.alloc(40);
     const src = srcIP.split(".").map(Number);
     const dst = dstIP.split(".").map(Number);
 
-    pkt[0] = 0x45; pkt[1] = 0x00;
-    pkt.writeUInt16BE(40, 2);
-    pkt.writeUInt16BE(rand(0xffff), 4);
-    pkt.writeUInt16BE(0x4000, 6);
-    pkt[8] = 64 + rand(64); pkt[9] = 6;
-    pkt.writeUInt16BE(0, 10);
-    pkt[12]=src[0]; pkt[13]=src[1]; pkt[14]=src[2]; pkt[15]=src[3];
-    pkt[16]=dst[0]; pkt[17]=dst[1]; pkt[18]=dst[2]; pkt[19]=dst[3];
-    pkt.writeUInt16BE(checksum(pkt.slice(0, 20)), 10);
+    // ── IP header (bytes 0–19) ──────────────────────────────────────
+    pkt[0] = 0x45;                        // version=4, IHL=5 (20 byte header)
+    pkt[1] = 0x00;                        // DSCP/ECN — default, no QoS
+    pkt.writeUInt16BE(40, 2);             // total packet length (IP + TCP)
+    pkt.writeUInt16BE(rand(0xffff), 4);   // random ID — avoids fingerprinting
+    pkt.writeUInt16BE(0x4000, 6);         // DF flag set, fragment offset=0
+    pkt[8] = 64 + rand(64);              // TTL randomised 64–127 — breaks OS detection
+    pkt[9] = 6;                           // protocol=TCP
+    pkt.writeUInt16BE(0, 10);             // checksum placeholder (filled below)
+    pkt[12]=src[0]; pkt[13]=src[1]; pkt[14]=src[2]; pkt[15]=src[3]; // spoofed source IP
+    pkt[16]=dst[0]; pkt[17]=dst[1]; pkt[18]=dst[2]; pkt[19]=dst[3]; // real destination IP
+    pkt.writeUInt16BE(checksum(pkt.slice(0, 20)), 10); // IP header checksum
 
-    pkt.writeUInt16BE(srcPort, 20);
-    pkt.writeUInt16BE(dstPort, 22);
-    pkt.writeUInt32BE(rand(0xffffffff) >>> 0, 24);
-    pkt.writeUInt32BE(0, 28);
-    pkt[32] = 0x50; pkt[33] = 0x02;
-    pkt.writeUInt16BE(rand(0xffff) | 0x1000, 34);
-    pkt.writeUInt16BE(0, 36); pkt.writeUInt16BE(0, 38);
+    // ── TCP header (bytes 20–39) ────────────────────────────────────
+    pkt.writeUInt16BE(srcPort, 20);                    // source port (random)
+    pkt.writeUInt16BE(dstPort, 22);                    // destination port
+    pkt.writeUInt32BE(rand(0xffffffff) >>> 0, 24);     // random sequence number
+    pkt.writeUInt32BE(0, 28);                          // ack=0 (SYN has no ack)
+    pkt[32] = 0x50;                                    // data offset=5 (20 byte header)
+    pkt[33] = 0x02;                                    // flags: SYN only
+    pkt.writeUInt16BE(rand(0xffff) | 0x1000, 34);      // random window size
+    pkt.writeUInt16BE(0, 36);                          // checksum placeholder (filled below)
+    pkt.writeUInt16BE(0, 38);                          // urgent pointer=0
 
+    // ── TCP checksum — requires pseudo header (RFC 793) ────────────
+    // Pseudo header = src IP + dst IP + zero byte + protocol + TCP length
+    // It is not sent on the wire — only used for checksum calculation
     const pseudo = Buffer.alloc(12);
     pseudo[0]=src[0]; pseudo[1]=src[1]; pseudo[2]=src[2]; pseudo[3]=src[3];
     pseudo[4]=dst[0]; pseudo[5]=dst[1]; pseudo[6]=dst[2]; pseudo[7]=dst[3];
-    pseudo[8]=0; pseudo[9]=6;
-    pseudo.writeUInt16BE(20, 10);
+    pseudo[8]=0; pseudo[9]=6;            // zero byte + protocol=TCP
+    pseudo.writeUInt16BE(20, 10);        // TCP segment length (header only, no payload)
     pkt.writeUInt16BE(checksum(Buffer.concat([pseudo, pkt.slice(20)])), 36);
 
     return pkt;
