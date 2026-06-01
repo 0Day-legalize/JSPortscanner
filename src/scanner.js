@@ -125,7 +125,7 @@ function sendDecoys(dstIP, dstPort) {
     }
 }
 
-// --- tcp / tls ---
+// --- port scanning + banner grabbing ---
 
 function tryTCPConnect(host, port, useTLS, hostname) {
     return new Promise((resolve) => {
@@ -142,6 +142,7 @@ function tryTCPConnect(host, port, useTLS, hostname) {
 
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             connected = true;
+            // banner grab — send HTTP HEAD to provoke a response from web services
             socket.write(
                 `HEAD / HTTP/1.1\r\n` +
                 `Host: ${hostname}\r\n` +
@@ -173,7 +174,7 @@ async function scanTCPPort(host, port, hostname = host) {
     return { proto: tlsRes === null ? "TCP" : "TLS", port, data: res };
 }
 
-// --- udp ---
+// --- udp port scanning ---
 
 function tryUDPConnect(host, port) {
     return new Promise((resolve) => {
