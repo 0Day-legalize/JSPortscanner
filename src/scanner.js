@@ -24,7 +24,7 @@ const J_MAX    = cfg.jitterMaxMs;
 const DECOYS   = cfg.decoyCount;
 const PLAIN    = new Set(cfg.plaintextPorts);
 
-// --- helpers ---
+// --- obfuscation helpers ---
 
 const rand = (n) => Math.floor(Math.random() * n);
 
@@ -53,7 +53,7 @@ async function runPool(tasks, limit, onDone) {
     await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
 }
 
-// --- decoys ---
+// --- obfuscation decoy IPs ---
 
 function randomPrivateIP() {
     const pick = rand(3);
