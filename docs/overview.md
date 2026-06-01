@@ -166,3 +166,7 @@ PortScanner/
 - `basic-ftp` npm package (optional — required for FTP credential testing)
 - `axios` npm package (optional — required for HTTP/HTTPS credential testing)
 - Root / `sudo` (enforced at scanner startup — required by raw socket API)
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

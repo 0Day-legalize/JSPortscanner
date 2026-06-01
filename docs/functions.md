@@ -815,3 +815,7 @@ node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
 - The process does not require root — credential testing uses standard TCP connections only.
 - Missing optional packages (`ssh2`, `basic-ftp`, `axios`) print a warning but do not abort
   startup; affected protocol testers return `false` silently at runtime.
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

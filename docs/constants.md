@@ -460,3 +460,7 @@ use non-standard field names (e.g. `{ "user": "j_username", "pass": "j_password"
 **Effect of removing an entry:**
 That combination of field names is skipped. If the target application uses those field names
 exclusively, its login form will not be tested successfully.
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

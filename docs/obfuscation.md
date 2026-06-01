@@ -267,3 +267,7 @@ Two independent techniques combine here:
   as `servername` causes handshake failures on some TLS implementations.
 - A sufficiently sophisticated IDS that fingerprints scanner behaviour (rather than string matching)
   will still detect the probe pattern regardless of header content.
+
+---
+
+*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
