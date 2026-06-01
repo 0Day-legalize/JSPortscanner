@@ -1,0 +1,16 @@
+# username:password — one pair per line, # lines ignored
+admin:admin
+admin:password
+admin:123456
+admin:admin123
+root:root
+root:password
+root:123456
+root:toor
+user:user
+user:password
+guest:guest
+guest:password
+ftp:ftp
+anonymous:anonymous
+anonymous:anonymous@test.com
