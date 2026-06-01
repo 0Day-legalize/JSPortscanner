@@ -306,20 +306,30 @@ async function testHost(host, ports, credentials) {
 //  ENTRY POINT
 // ================================================================
 
-const [scanFile, wordlistFile] = process.argv.slice(2);
+const args        = process.argv.slice(2);
+const scanFile    = args[0];
+const wordlistFile = args[1];
+const hostsArg    = args.find(a => a.startsWith("--hosts="));
+const targetHosts = hostsArg ? new Set(hostsArg.replace("--hosts=", "").split(",")) : null;
 
 if (!scanFile || !wordlistFile) {
-    console.error("Usage: node src/credtest.js <scan.json> <wordlist.txt>");
-    console.error("Example: node src/credtest.js scans/results.json config/wordlist.txt");
+    console.error("Usage: node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]");
+    console.error("Example: node src/credtest.js scans/results.json config/wordlist.txt --hosts=1.2.3.4,1.2.3.5");
     process.exit(1);
 }
 
 const scanResults  = JSON.parse(fs.readFileSync(scanFile, "utf8"));
 const credentials  = parseWordlist(wordlistFile);
+const targets      = targetHosts ? scanResults.filter(h => targetHosts.has(h.host)) : scanResults;
 
-console.log(`Loaded ${scanResults.length} host(s), ${credentials.length} credential pair(s)\n`);
+if (targetHosts && targets.length === 0) {
+    console.error("No matching hosts found in scan file for the specified --hosts");
+    process.exit(1);
+}
 
-for (const hostEntry of scanResults) {
+console.log(`Loaded ${targets.length} target host(s), ${credentials.length} credential pair(s)\n`);
+
+for (const hostEntry of targets) {
     console.log(`[ ${hostEntry.host} ]`);
     const { found, honeypot } = await testHost(hostEntry.host, hostEntry.ports, credentials);
 
