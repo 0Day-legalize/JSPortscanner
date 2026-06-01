@@ -231,7 +231,7 @@ async function scanHost(host, firstPort, lastPort) {
     } catch {}
 
     function onResult({ proto, port, data }) {
-        if (data === null || data === "OPEN|FILTERED") return;
+        if (!data || data === "OPEN|FILTERED" || data.startsWith("ERROR:")) return;
 
         const banner = typeof data === "string" && data.trim()
             ? data.trim().split(/\r?\n/)
@@ -288,8 +288,7 @@ function expandCIDR(cidr) {
 
 function parseTargetFile(filePath) {
     const hosts = [];
-    for (const raw of fs.readFileSync(filePath, "utf8").split("\n")) {
-        const line = raw.trim();
+    for (const line of fs.readFileSync(filePath, "utf8").split("\n").map(l => l.trim())) {
         if (!line || line.startsWith("#")) continue;
         line.includes("/") ? hosts.push(...expandCIDR(line)) : hosts.push(line);
     }
