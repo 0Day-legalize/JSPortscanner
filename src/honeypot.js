@@ -1,4 +1,5 @@
-import fs from "node:fs";
+import fs  from "node:fs";
+import net from "node:net";
 
 const cfg = JSON.parse(fs.readFileSync(new URL("../config/settings.json", import.meta.url), "utf8")).honeypot;
 
@@ -7,47 +8,167 @@ const TPOT_PORT_COMBO      = new Set(cfg.tpotPortCombo);
 const TPOT_MATCH_MIN       = cfg.tpotMatchMin;
 const TELNET_PORT          = cfg.telnetPort;
 const SUSPICIOUS_THRESHOLD = cfg.suspiciousPortThreshold;
+const FTP_HONEYPOT_BANNERS = cfg.ftpHoneypotBanners;
+const COWRIE_KEX_TELLS     = cfg.cowrieKexTells;
+const COWRIE_MAC_TELLS     = cfg.cowrieMacTells;
+const COWRIE_ENC_TELLS     = cfg.cowrieEncTells;
+const COWRIE_HOSTKEY_TELLS = cfg.cowrieHostKeyTells;
 
 // Real distro-packaged OpenSSH always includes an OS suffix — bare version strings are a Cowrie tell
 const SSH_DISTRO_SUFFIX = new RegExp(`SSH-2\\.0-OpenSSH_[\\d.p]+\\s+(${cfg.sshDistroKeywords.join("|")})`, "i");
 
-// --- ʕ•ᴥ•ʔ detection logic ʕ•ᴥ•ʔ ---
+// --- ʕ•ᴥ•ʔ ssh kex fingerprint ʕ•ᴥ•ʔ ---
 
-function checkHost(ports) {
+/**
+ * Connects to an SSH port, reads the server's KEX_INIT packet, and returns
+ * the algorithm lists. Cowrie (via twisted.conch) advertises legacy algorithms
+ * that modern OpenSSH dropped — this detects it without needing credentials.
+ *
+ * @param {string} host
+ * @param {number} port
+ * @returns {Promise<{kexAlgos, hostKeyAlgos, encAlgos, macAlgos}|null>}
+ */
+function probeSSHFingerprint(host, port) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host, port });
+        let buf        = Buffer.alloc(0);
+        let bannerDone = false;
+
+        socket.setTimeout(5000);
+        socket.on("timeout", () => { socket.destroy(); resolve(null); });
+        socket.on("error",   () => resolve(null));
+
+        socket.on("connect", () => {
+            // send a minimal SSH version string to trigger the server's KEX_INIT
+            socket.write("SSH-2.0-RCN\r\n");
+        });
+
+        socket.on("data", (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+
+            // strip the banner line first
+            if (!bannerDone) {
+                const end = buf.indexOf("\r\n");
+                if (end === -1) return;
+                bannerDone = true;
+                buf = buf.slice(end + 2);
+            }
+
+            // need at least the 4-byte packet length + 1-byte padding length + 1-byte msg type
+            if (buf.length < 6) return;
+
+            const packetLen   = buf.readUInt32BE(0);
+            if (buf.length < 4 + packetLen) return;
+
+            const paddingLen  = buf[4];
+            const payload     = buf.slice(5, 4 + packetLen - paddingLen);
+
+            // MSG_KEXINIT = 20
+            if (payload[0] !== 20) { socket.destroy(); resolve(null); return; }
+
+            // payload layout: 1 byte type + 16 bytes cookie + name-lists
+            let offset = 17;
+
+            function readNameList() {
+                if (offset + 4 > payload.length) return [];
+                const len = payload.readUInt32BE(offset); offset += 4;
+                if (offset + len > payload.length) return [];
+                const str = payload.slice(offset, offset + len).toString("utf8"); offset += len;
+                return str ? str.split(",") : [];
+            }
+
+            const kexAlgos     = readNameList();
+            const hostKeyAlgos = readNameList();
+            const encAlgos     = readNameList(); // client→server
+            readNameList();                      // enc server→client (skip)
+            const macAlgos     = readNameList(); // client→server
+
+            socket.destroy();
+            resolve({ kexAlgos, hostKeyAlgos, encAlgos, macAlgos });
+        });
+    });
+}
+
+/**
+ * Checks a parsed SSH KEX fingerprint against known Cowrie algorithm tells.
+ * Returns an array of reason strings, empty if nothing suspicious.
+ *
+ * @param {{kexAlgos, hostKeyAlgos, encAlgos, macAlgos}} fp
+ * @param {number} port
+ * @returns {string[]}
+ */
+function checkSSHFingerprint(fp, port) {
     const reasons = [];
+
+    for (const algo of COWRIE_KEX_TELLS)
+        if (fp.kexAlgos.includes(algo))
+            reasons.push(`Cowrie KEX algorithm on port ${port}: ${algo}`);
+
+    for (const algo of COWRIE_MAC_TELLS)
+        if (fp.macAlgos.includes(algo))
+            reasons.push(`Cowrie MAC algorithm on port ${port}: ${algo}`);
+
+    for (const algo of COWRIE_ENC_TELLS)
+        if (fp.encAlgos.includes(algo))
+            reasons.push(`Cowrie cipher on port ${port}: ${algo}`);
+
+    for (const algo of COWRIE_HOSTKEY_TELLS)
+        if (fp.hostKeyAlgos.includes(algo))
+            reasons.push(`Cowrie host key type on port ${port}: ${algo}`);
+
+    return reasons;
+}
+
+// --- ʕ•ᴥ•ʔ static detection ʕ•ᴥ•ʔ ---
+
+/**
+ * Checks scan result ports against static honeypot indicators.
+ * Returns an array of reason strings.
+ *
+ * @param {object} ports - Port map from scan JSON { "22": "TCP: ...", ... }
+ * @returns {string[]}
+ */
+function checkHost(ports) {
+    const reasons  = [];
     const openPorts = Object.keys(ports).map(Number);
 
     for (const [port, value] of Object.entries(ports)) {
         const isSSH = value.startsWith("TCP: SSH-2.0-OpenSSH");
+        const isFTP = value.startsWith("TCP: 220");
 
-        // exact Cowrie banner match takes priority — skip bare-suffix check to avoid double-flagging
+        // exact Cowrie SSH banner — takes priority to avoid double-flagging
         const cowrieMatch = isSSH && COWRIE_SSH_BANNERS.find(b => value.includes(b));
         if (cowrieMatch) {
             reasons.push(`Cowrie SSH banner on port ${port}: "${cowrieMatch}"`);
             continue;
         }
 
-        // bare version string with no OS suffix — real distro packages always include one
+        // SSH banner with no OS distro suffix
         if (isSSH && !SSH_DISTRO_SUFFIX.test(value)) {
-            reasons.push(`SSH banner missing OS suffix on port ${port} — possible honeypot: "${value.replace("TCP: ", "")}"`);
+            reasons.push(`SSH banner missing OS suffix on port ${port}: "${value.replace("TCP: ", "")}"`);
+        }
+
+        // FTP banner matches known honeypot strings
+        if (isFTP) {
+            const ftpMatch = FTP_HONEYPOT_BANNERS.find(b => value.includes(b));
+            if (ftpMatch) {
+                reasons.push(`Honeypot FTP banner on port ${port}: "${ftpMatch}"`);
+            }
         }
     }
 
-    // Telnet open — not found on legitimate modern servers
-    if (openPorts.includes(TELNET_PORT)) {
-        reasons.push(`Telnet (port 23) open — almost always a honeypot on modern networks`);
-    }
+    // Telnet open — almost never legitimate on modern servers
+    if (openPorts.includes(TELNET_PORT))
+        reasons.push(`Telnet (port 23) open — almost always a honeypot`);
 
-    // check for T-Pot port combination
+    // T-Pot port combination
     const tpotMatches = openPorts.filter(p => TPOT_PORT_COMBO.has(p));
-    if (tpotMatches.length >= TPOT_MATCH_MIN) {
-        reasons.push(`T-Pot port combination detected: ${tpotMatches.join(", ")}`);
-    }
+    if (tpotMatches.length >= TPOT_MATCH_MIN)
+        reasons.push(`T-Pot port combination: ${tpotMatches.join(", ")}`);
 
-    // flag hosts with suspiciously many open ports
-    if (openPorts.length >= SUSPICIOUS_THRESHOLD) {
-        reasons.push(`${openPorts.length} ports open — unusually high for a single host`);
-    }
+    // suspiciously many open ports
+    if (openPorts.length >= SUSPICIOUS_THRESHOLD)
+        reasons.push(`${openPorts.length} ports open — unusually high`);
 
     return reasons;
 }
@@ -66,6 +187,13 @@ let flagged = 0;
 
 for (const entry of scanResults) {
     const reasons = checkHost(entry.ports);
+
+    // live SSH KEX fingerprint probe for any SSH port found
+    for (const [portStr, value] of Object.entries(entry.ports)) {
+        if (!value.startsWith("TCP: SSH")) continue;
+        const fp = await probeSSHFingerprint(entry.host, Number(portStr));
+        if (fp) reasons.push(...checkSSHFingerprint(fp, portStr));
+    }
 
     if (reasons.length > 0) {
         entry.honeypot = { suspected: true, reasons };
