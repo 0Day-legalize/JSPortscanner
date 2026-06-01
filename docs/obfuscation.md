@@ -66,30 +66,30 @@ background service discovery all have irregular timing profiles.
 
 ## 3. Random source port
 
-**Implementation:** `randomSourcePort()` — called inside `tryTCPConnect` to set `localPort`, and
-inside `buildSynPacket` for the TCP header source port field in decoy packets.
+**Implementation:** `randomSourcePort()` — called inside `buildSynPacket` to populate the TCP
+header source port field in decoy packets.
 
 **What it does:**
-Every outgoing TCP connection binds to a different randomly chosen local port number in the range
-1024–65535 (`Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024`).
+Each decoy SYN packet is built with a randomly chosen source port number in the range 1024–65535
+(`Math.floor(Math.random() * (65535 - 1024 + 1)) + 1024`). Real TCP and TLS connections use OS
+ephemeral port assignment.
 
 **Why it helps:**
-The OS assigns ephemeral ports sequentially by default (Linux starts around 32768 and increments).
-A scanner that opens many connections in quick succession would produce a run of sequential source
-ports: 32768, 32769, 32770... — another reliable scanner signature. Binding each socket to a
-random port breaks this sequence. To an IDS the source ports appear to be from an ordinary mix of
-active application sockets rather than a systematic scanner.
+Decoy packets generated from multiple random source ports look like traffic from several distinct
+sockets rather than a single systematic burst. Combined with the random private source IPs, each
+decoy appears to be an independent connection from a different host and port, which is far harder
+to dismiss as a single scanning source.
 
-| Scenario | What the IDS sees |
+| Scenario | What the IDS sees in decoy traffic |
 |---|---|
-| Without random source port | Source ports 32768, 32769, 32770... — matches OS auto-assign scanner pattern |
-| With random source port | Source ports 54102, 18442, 61007... — looks like normal application traffic |
+| Without random source port | All decoys share the same source port — obvious spoofing artefact |
+| With random source port | Each decoy arrives from a different source port — resembles natural concurrent connections |
 
 **Gotchas:**
-- In rare cases the chosen port may already be in use. The OS will return `EADDRINUSE` and the
-  connection attempt will fail. With 64,512 available ports and typical short-lived socket hold
-  times, collision probability is negligible but non-zero. Affected probes will register as closed,
-  producing a potential false-negative.
+- Real probe sockets (`tryTCPConnect`, `tryTLSConnect`) rely on OS-assigned ephemeral ports. The OS
+  assigns these sequentially by default (Linux starts around 32768). A scanner making many real
+  connections in quick succession would still produce sequential source ports on the real probes —
+  this technique applies only to decoy packets, not real probes.
 - Decoy packets and the real probe for the same destination port may share the same randomly-chosen
   source port by coincidence. This is harmless — the decoy source IPs are already different.
 
@@ -214,9 +214,9 @@ a distinct fingerprint of a TLS-naive scanner. By skipping TLS on known plaintex
 
 ## 6. HTTP/1.1 banner probe with PTR-resolved Host header
 
-**Implementation:** `tryTCPConnect` — after a successful connect, sends a full HTTP/1.1 HEAD
-request using the PTR-resolved hostname (from `dns.reverse()` in `scanHost`) as the `Host` header
-value.
+**Implementation:** `tryTCPConnect` and `tryTLSConnect` — after a successful connect or TLS
+handshake, each sends a full HTTP/1.1 HEAD request using the PTR-resolved hostname (from
+`dns.reverse()` in `scanHost`) as the `Host` header value.
 
 **What it does:**
 On every successful TCP or TLS connection the scanner sends:
@@ -273,9 +273,9 @@ Four independent techniques combine here:
   returned is whatever the service sent spontaneously on connection.
 - If no PTR record exists for the target IP, the `Host` header falls back to the IP address. This
   is less stealthy but functionally correct.
-- TLS SNI (`servername`) also uses the PTR hostname. When `hostname` is a bare IP address (no PTR
-  record found), `servername` is omitted from the `tls.connect` options entirely — passing an IP
-  as `servername` causes handshake failures on some TLS implementations.
+- TLS SNI (`servername`) in `tryTLSConnect` also uses the PTR hostname. When `hostname` is a bare
+  IP address (no PTR record found), `servername` is omitted from the `tls.connect` options entirely
+  — passing an IP as `servername` causes handshake failures on some TLS implementations.
 - A sufficiently sophisticated IDS that fingerprints scanner behaviour (rather than string matching)
   will still detect the probe pattern regardless of header content.
 

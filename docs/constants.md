@@ -1,13 +1,15 @@
 # Configuration Reference — `config/settings.json`
 
-All tunable parameters live in `config/settings.json`. Both `src/scanner.js` and `src/credtest.js`
-read this file at startup under their respective top-level keys (`scanner` and `credtest`). No
-environment variables or CLI flags are needed — edit the JSON file and restart the process.
+All tunable parameters live in `config/settings.json`. `src/scanner.js`, `src/credtest.js`, and
+`src/honeypot.js` each read this file at startup under their respective top-level keys (`scanner`,
+`credtest`, and `honeypot`). No environment variables or CLI flags are needed — edit the JSON file
+and restart the process.
 
 ```json
 {
   "scanner":  { ... },
-  "credtest": { ... }
+  "credtest": { ... },
+  "honeypot": { ... }
 }
 ```
 
@@ -209,7 +211,7 @@ triggering different countermeasures.
 |---|---|
 | Default | Five real browser UA strings (Chrome Windows, Chrome macOS, Firefox Linux, Firefox Windows, Safari macOS) |
 | Type | `string[]` |
-| Scope | `randomUA()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+| Scope | `randomUA()` — picked once per connection inside `tryTCPConnect` and `tryTLSConnect` |
 
 **What it controls:**
 The pool of HTTP `User-Agent` header values rotated across probes. One string is picked at random
@@ -231,7 +233,7 @@ rotation effect.
 |---|---|
 | Default | `["/", "/index.html", "/robots.txt", "/favicon.ico", "/sitemap.xml"]` |
 | Type | `string[]` |
-| Scope | `randomPath()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+| Scope | `randomPath()` — picked once per connection inside `tryTCPConnect` and `tryTLSConnect` |
 
 **What it controls:**
 The pool of URL paths used in the HTTP HEAD request sent during banner grabbing. One path is picked
@@ -252,7 +254,7 @@ Smaller pool; more repeated paths across a scan run.
 |---|---|
 | Default | Google, Bing, DuckDuckGo, Reddit, t.co |
 | Type | `string[]` |
-| Scope | `randomReferer()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+| Scope | `randomReferer()` — picked once per connection inside `tryTCPConnect` and `tryTLSConnect` |
 
 **What it controls:**
 The pool of `Referer` header values rotated per probe. Simulates a user navigating to the target
@@ -273,7 +275,7 @@ Smaller pool; less variation.
 |---|---|
 | Default | en-US, de-DE, fr-FR, nl-NL, es-ES, pl-PL (each with quality weighting) |
 | Type | `string[]` |
-| Scope | `randomLanguage()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+| Scope | `randomLanguage()` — picked once per connection inside `tryTCPConnect` and `tryTLSConnect` |
 
 **What it controls:**
 The pool of `Accept-Language` header values rotated per probe. Simulates requests originating from
@@ -295,7 +297,7 @@ Smaller pool; less locale diversity.
 |---|---|
 | Default | Four strings containing plausible session, GA, GID, and consent cookie patterns |
 | Type | `string[]` |
-| Scope | `randomCookie()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+| Scope | `randomCookie()` — picked once per connection inside `tryTCPConnect` and `tryTLSConnect` |
 
 **What it controls:**
 The pool of `Cookie` header values rotated per probe. Sending a plausible cookie string makes the
@@ -458,8 +460,8 @@ Any open port with that number will be tested with SSH credentials, regardless o
 Useful for SSH servers running on non-standard ports (e.g. `2022`, `22222`).
 
 **Effect of removing a port:**
-That port number will not be SSH-tested unless its banner triggers the `portValue.startsWith("TLS")`
-or HTTP fallback checks. Removing port 22 would cause standard SSH to be skipped.
+That port number will not be SSH-tested unless its port object's `proto` or banner triggers the TLS
+or HTTP fallback checks in `detectService`. Removing port 22 would cause standard SSH to be skipped.
 
 ---
 
@@ -499,8 +501,8 @@ Port numbers classified as `"http"` (plain HTTP), routing them to `tryHTTP` with
 HTTP form-login testing runs against that port using plain HTTP scheme.
 
 **Effect of removing a port:**
-That port will not be HTTP-tested unless its scanner banner starts with `"TCP: HTTP"`, which
-triggers the banner-based fallback in `detectService`.
+That port will not be HTTP-tested unless its port object has `proto: "TCP"` and a banner starting
+with `"HTTP"`, which triggers the banner-based fallback in `detectService`.
 
 ---
 
@@ -519,9 +521,9 @@ Port numbers classified as `"https"`, routing them to `tryHTTP` with `useHTTPS =
 HTTPS form-login testing (with certificate validation disabled) runs against that port.
 
 **Effect of removing a port:**
-That port falls through to the banner-based fallback — if the scanner recorded `"TLS"` as its
-`portValue`, `detectService` will still classify it as `"https"`. Port-number matching is just the
-first check; the banner check acts as a safety net for non-standard HTTPS ports.
+That port falls through to the banner-based fallback — if the scanner recorded `proto: "TLS"` in
+the port object, `detectService` will still classify it as `"https"`. Port-number matching is just
+the first check; the proto field acts as a safety net for non-standard HTTPS ports.
 
 ---
 

@@ -231,44 +231,138 @@ shufflePorts(1, 5);
 
 ---
 
-## tryTCPConnect(host, port, useTLS, hostname)
+## tryTCPConnect(host, port, hostname)
 
 **Purpose:**
-Opens a single TCP or TLS connection to the target and attempts to elicit a banner by sending an
-HTTP/1.1 HEAD request. Returns whatever the service sends back, or null if the connection could not
-be established.
+Opens a plain TCP connection to the target and attempts to elicit a banner by sending an HTTP/1.1
+HEAD request. Used as the fallback probe when `tryTLSConnect` returns null. Returns whatever the
+service sends back, or null if the connection could not be established.
 
 **Parameters:**
-- `host`     `{string}`  — IP address or hostname to connect to
-- `port`     `{number}`  — destination port (1–65535)
-- `useTLS`   `{boolean}` — when `true`, wraps the socket in TLS (`rejectUnauthorized: false` so
-  self-signed certificates do not abort the connection)
-- `hostname` `{string}`  — value used in the TLS `servername` field and the HTTP `Host` header;
-  typically a PTR-resolved hostname so traffic resembles a real browser session
+- `host`     `{string}` — IP address or hostname to connect to
+- `port`     `{number}` — destination port (1–65535)
+- `hostname` `{string}` — value used in the HTTP `Host` header; typically the PTR-resolved hostname
+  so traffic resembles a real browser session
 
 **Returns:** `{Promise<string|null>}`
 - Response text (possibly empty string `""`) if the connection was established
 - `null` if the connection was refused, reset, or timed out without connecting
 
 **Notes:**
-- `rejectUnauthorized: false` is intentional — scanning infrastructure often uses self-signed certs
-  and we care about open/closed state, not certificate validity.
-- `servername` is omitted from the TLS options when `hostname` is a bare IP address. The TLS SNI
-  extension requires a DNS name; passing an IP as `servername` causes handshake failures on some
-  implementations.
 - The HTTP HEAD probe is opportunistic. Services that do not speak HTTP will respond with their own
-  banner (e.g. SSH, FTP, SMTP) or nothing at all. In both cases `responseData` holds whatever
-  bytes arrived.
+  banner (e.g. SSH, FTP, SMTP) or nothing at all. In both cases the accumulated buffer holds
+  whatever bytes arrived.
 - `socket.destroy()` on timeout triggers the `close` event, which resolves the promise. Without
   this chain the promise would hang indefinitely after a timeout.
-- The `error` event only resolves the promise with `null` when `isConnected` is false. If an error
+- The `error` event only resolves the promise with `null` when `connected` is false. If an error
   fires after connect (e.g. mid-transfer RST) the `close` event resolves it instead with whatever
   data arrived — partial responses are still useful.
+- This function retains a dead `useTLS` parameter from an earlier version; it is always called with
+  `false` and the TLS path has been superseded by `tryTLSConnect`.
 
 **Example:**
 ```js
-const data = await tryTCPConnect("10.0.0.1", 443, true, "example.com");
-if (data !== null) console.log("443 is open, got:", data.slice(0, 80));
+const data = await tryTCPConnect("10.0.0.1", 22, "10.0.0.1");
+if (data !== null) console.log("22 is open, got:", data.slice(0, 80));
+```
+
+---
+
+## extractCert(socket)
+
+**Purpose:**
+Reads the peer TLS certificate from a connected `TLSSocket` and returns the fields most useful for
+host identification. SANs in particular reveal every domain name the certificate covers, which
+often identifies the network owner without a separate WHOIS lookup.
+
+**Parameters:**
+- `socket` `{tls.TLSSocket}` — an already-connected TLS socket at or after the `secureConnect` event
+
+**Returns:** `{object|null}`
+- `{ cn, org, issuer, sans, expires }` on success
+- `null` if the socket has no peer certificate or the certificate has no subject
+
+**Notes:**
+- `cn`      — `subject.CN`; the common name of the certificate
+- `org`     — `subject.O`; the organisation field from the subject
+- `issuer`  — `issuer.O`; the CA organisation name
+- `sans`    — array of DNS and IP SAN strings with `DNS:` / `IP Address:` prefixes stripped; `null` if none
+- `expires` — `valid_to` as a date string; `null` if absent
+- Any field that is absent on the certificate is set to `null` rather than omitted, so callers can
+  check `cert.cn` without guarding for `undefined`.
+- Wrapped in try/catch because `getPeerCertificate()` can throw on malformed certificates.
+
+**Example:**
+```js
+socket.on("secureConnect", () => {
+    const cert = extractCert(socket);
+    if (cert) console.log(cert.sans); // => ["example.com", "www.example.com"]
+});
+```
+
+---
+
+## parseHeaders(raw)
+
+**Purpose:**
+Parses a raw HTTP response string and extracts a fixed set of fingerprinting headers into a plain
+object. Only headers that reveal server software or CMS identity are captured; the rest are ignored.
+
+**Parameters:**
+- `raw` `{string}` — full HTTP response text, including the status line
+
+**Returns:** `{object|null}`
+- Key/value map of lower-cased header names to trimmed values for headers that were present
+- `null` if none of the watched headers appeared in the response
+
+**Notes:**
+- Captured headers: `server`, `x-powered-by`, `content-type`, `location`, `x-generator`,
+  `x-drupal-cache`, `x-wordpress-cache`.
+- The status line (first line) is skipped by slicing off index 0 after splitting on `\r?\n`.
+- Parsing stops at the first blank line (`sep === -1`) so the response body is never scanned.
+- Returns `null` rather than an empty object so callers can use a simple truthiness check.
+
+**Example:**
+```js
+const headers = parseHeaders("HTTP/1.1 200 OK\r\nServer: nginx/1.24.0\r\nX-Powered-By: PHP/8.2\r\n\r\n");
+// => { server: "nginx/1.24.0", "x-powered-by": "PHP/8.2" }
+```
+
+---
+
+## tryTLSConnect(host, port, hostname)
+
+**Purpose:**
+Opens a TLS connection to the target, extracts the peer certificate via `extractCert`, and
+attempts to elicit a banner via HTTP/1.1 HEAD. Returns both the raw response text and the parsed
+certificate object, or null if the TLS handshake failed.
+
+**Parameters:**
+- `host`     `{string}` — IP address or hostname to connect to
+- `port`     `{number}` — destination port (1–65535)
+- `hostname` `{string}` — used as TLS `servername` (SNI) when it is a DNS name, and as the HTTP `Host` header
+
+**Returns:** `{Promise<{data: string, cert: object|null}|null>}`
+- `{ data, cert }` if the TLS handshake succeeded and the service sent data
+- `null` if the handshake failed, timed out, or the connection was refused
+
+**Notes:**
+- `rejectUnauthorized: false` is intentional — scanning targets commonly use self-signed certificates
+  and the scanner cares about open/closed state, not certificate validity.
+- `servername` is omitted when `hostname` is a bare IP address. Passing an IP as SNI causes
+  handshake failures on some TLS implementations.
+- `cert` is extracted at `secureConnect` time, before the banner write, so it is always populated
+  even if the service closes the connection immediately after the handshake.
+- Returns `null` (not `{ data: "", cert }`) when the service sends no data, to signal a clean "port
+  speaks TLS but gave no response" case to `scanTCPPort`.
+
+**Example:**
+```js
+const result = await tryTLSConnect("10.0.0.1", 443, "example.com");
+if (result) {
+    console.log(result.data.slice(0, 80)); // HTTP response
+    console.log(result.cert?.cn);          // certificate CN
+}
 ```
 
 ---
@@ -287,24 +381,28 @@ HTTPS, SMTPS, and similar services without a wasted round-trip.
 - `hostname` `{string}` — (optional, defaults to `host`) PTR-resolved hostname passed through to
   `tryTCPConnect` for use in TLS SNI and the HTTP `Host` header
 
-**Returns:** `{Promise<{proto: string, port: number, data: string|null}>}`
-- `proto` — `"TLS"` if the TLS probe succeeded, `"TCP"` otherwise
-- `port`  — echoed back for result aggregation
-- `data`  — response text, or `null` if the port is closed
+**Returns:** `{Promise<{proto: string, port: number, data: string|null, cert: object|null, headers: object|null}>}`
+- `proto`   — `"TLS"` if the TLS probe succeeded, `"TCP"` otherwise
+- `port`    — echoed back for result aggregation
+- `data`    — response text, or `null` if the port is closed
+- `cert`    — parsed certificate fields from `extractCert`, or `null` for non-TLS ports or when no cert was presented
+- `headers` — fingerprinting headers from `parseHeaders`, or `null` when no watched headers were present
 
 **Notes:**
-- Ports in `PLAINTEXT_PORTS` skip TLS entirely. Attempting a TLS handshake against port 22 (SSH) or
-  port 3306 (MySQL) would always fail and waste two connection slots.
+- Ports in `PLAINTEXT_PORTS` skip `tryTLSConnect` entirely. Attempting a TLS handshake against
+  port 22 (SSH) or port 3306 (MySQL) would always fail and waste two connection slots.
 - If TLS returns `null` and plain TCP is attempted, the final result uses proto `"TCP"` regardless
   of whether plain TCP also returns null. The proto field reflects what protocol actually got data,
   not what was tried last.
 - Both probes are never run simultaneously. The plain TCP probe only starts if TLS returned null,
   avoiding two simultaneous connections to the same port.
+- `headers` is parsed from the response text of whichever probe succeeded. On a plain TCP port
+  `cert` is always `null`.
 
 **Example:**
 ```js
 const result = await scanTCPPort("192.168.1.1", 443);
-// => { proto: "TLS", port: 443, data: "HTTP/1.1 200 OK\r\n..." }
+// => { proto: "TLS", port: 443, data: "HTTP/1.1 200 OK\r\n...", cert: { cn: "example.com", ... }, headers: { server: "nginx" } }
 ```
 
 ---
@@ -423,11 +521,11 @@ multiple targets.
 - `firstPort` `{number}` — start of port range, inclusive
 - `lastPort`  `{number}` — end of port range, inclusive
 
-**Returns:** `{Promise<{host: string, ports: object, scannedAt: string}>}`
-- `host`      — echoed input value
-- `ports`     — plain object keyed by port number string, values are proto/banner strings, e.g.
-  `{ "22": "TCP: SSH-2.0-OpenSSH_8.9", "443": "TLS" }`; ports are sorted ascending before the
-  object is built
+**Returns:** `{Promise<{host: string, hostname?: string, ports: object, scannedAt: string}>}`
+- `host`      — echoed input value (IP or hostname passed on the CLI)
+- `hostname`  — PTR-resolved hostname, present only when it differs from `host`
+- `ports`     — plain object keyed by port number string; each value is `{ proto, banner, cert?, headers? }`;
+  ports are sorted ascending before the object is built
 - `scannedAt` — ISO 8601 timestamp of when the scan completed
 
 **Notes:**
@@ -436,10 +534,10 @@ multiple targets.
   header. Both lookups are silently skipped on failure.
 - If DNS lookup fails the host is scanned normally but decoys are disabled (silently). The catch
   block intentionally has no body.
+- `hostname` is only included in the result object when the PTR hostname differs from the raw
+  `host` argument, keeping the JSON compact for hosts with no PTR record.
 - `onPortResult` is an inner function rather than a top-level one because it closes over
   `openPorts` and `host`, keeping the per-host result accumulation self-contained.
-- The `\r\x1b[K` escape sequence in `onPortResult` erases the rolling progress line that quiet
-  hosts write, so open-port lines are never visually corrupted by the progress counter.
 - TCP and UDP pools run with `Promise.all`, meaning both start simultaneously and `scanHost`
   resolves only after both finish. This halves elapsed time compared to running TCP then UDP
   sequentially.
@@ -449,7 +547,7 @@ multiple targets.
 **Example:**
 ```js
 const result = await scanHost("192.168.1.1", 1, 1024);
-// => { host: "192.168.1.1", ports: { "22": "TCP: SSH-2.0-OpenSSH_8.9", "80": "TCP: HTTP/1.1 200 OK" }, scannedAt: "2026-05-29T..." }
+// => { host: "192.168.1.1", hostname: "server1.example.com", ports: { "22": { proto: "TCP", banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3" } }, scannedAt: "2026-05-29T..." }
 ```
 
 ---
@@ -674,7 +772,9 @@ Inspects the open ports and banners of a single host against static honeypot ind
 a list of reason strings. Returns an empty array if nothing suspicious is found.
 
 **Parameters:**
-- `ports` `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" }`
+- `ports` `{object}` — port map from scan JSON; accepts both the current object format
+  `{ "22": { proto: "TCP", banner: "SSH-2.0-..." } }` and the legacy string format
+  `{ "22": "TCP: SSH-2.0-..." }`
 
 **Returns:** `{string[]}` — human-readable reason strings, one per triggered heuristic; empty array if clean
 
@@ -689,7 +789,7 @@ a list of reason strings. Returns an empty array if nothing suspicious is found.
 - `SSH_DISTRO_SUFFIX` is a compiled `RegExp` built at module load from `cfg.sshDistroKeywords`. Real
   distro-packaged OpenSSH always appends an OS string (e.g. `Ubuntu-4ubuntu2.2`) — its absence is
   a reliable Cowrie tell for versions not in the exact-match list.
-- FTP banner matching checks ports whose value starts with `"TCP: 220"` against `FTP_HONEYPOT_BANNERS`
+- FTP banner matching checks ports whose banner starts with `"220"` against `FTP_HONEYPOT_BANNERS`
   using a substring search — covers banners where the scanner captured more text than the list entry.
 - `TPOT_MATCH_MIN` (default 4) means at least 4 ports from the T-Pot set must be open before the
   combination is flagged, reducing false positives on hosts that legitimately run web + SSH + FTP.
@@ -698,7 +798,7 @@ a list of reason strings. Returns an empty array if nothing suspicious is found.
 
 **Example:**
 ```js
-checkHost({ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" });
+checkHost({ "22": { proto: "TCP", banner: "SSH-2.0-OpenSSH_5.3" }, "23": { proto: "TCP", banner: null } });
 // => [
 //      'Cowrie SSH banner on port 22: "SSH-2.0-OpenSSH_5.3"',
 //      "Telnet (port 23) open — almost always a honeypot"
@@ -852,11 +952,12 @@ if (ok) console.log("HTTP login succeeded");
 **Purpose:**
 Classifies an open port as `ssh`, `ftp`, `http`, `https`, or `null` so `testHost` knows which
 protocol tester to invoke. Checks port number first against known port sets, then falls back to
-inspecting the banner string from the scan for TLS or HTTP indicators.
+inspecting the proto and banner from the scan result for TLS or HTTP indicators.
 
 **Parameters:**
-- `portNum`   `{number}` — the port number key from the scan JSON
-- `portValue` `{string}` — the proto/banner string stored for that port (e.g. `"TCP: SSH-2.0-OpenSSH_8.9"`, `"TLS"`)
+- `portNum`   `{number}`          — the port number key from the scan JSON
+- `portValue` `{object|string}`   — the port entry from the scan JSON; accepts both the current
+  object format `{ proto, banner, ... }` and the legacy string format `"TCP: banner"`
 
 **Returns:** `{"ssh"|"ftp"|"http"|"https"|null}` — service type, or `null` if the port is not a recognised testable service
 
@@ -864,18 +965,18 @@ inspecting the banner string from the scan for TLS or HTTP indicators.
 - Port-number matching takes priority over banner matching. If port 22 runs an HTTP server (unusual
   but possible), it will be treated as SSH. This is intentional — port numbers are the most reliable
   classification signal for the common case.
-- Banner fallback (`portValue.startsWith("TLS")` → `"https"`) catches HTTPS running on non-standard
-  ports (e.g. 8443 is covered by `HTTPS_PORTS`, but 9443 would fall through to the banner check).
+- Banner fallback (`proto === "TLS"` → `"https"`) catches HTTPS running on non-standard ports
+  (e.g. 8443 is covered by `HTTPS_PORTS`, but 9443 would fall through to the banner check).
 - `null` is returned for UDP-only ports, database ports, or any service the tool does not support.
   `testHost` skips `null` entries entirely.
 
 **Example:**
 ```js
-detectService(22,   "TCP: SSH-2.0-OpenSSH_8.9")  // => "ssh"
-detectService(443,  "TLS")                        // => "https"
-detectService(8080, "TCP: HTTP/1.1 200 OK")       // => "http"
-detectService(9999, "TLS: ...")                   // => "https" (banner fallback)
-detectService(3306, "TCP: ...")                   // => null    (MySQL — not tested)
+detectService(22,   { proto: "TCP", banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3" })  // => "ssh"
+detectService(443,  { proto: "TLS", banner: "HTTP/1.1 200 OK" })                 // => "https"
+detectService(8080, { proto: "TCP", banner: "HTTP/1.1 200 OK" })                 // => "http"
+detectService(9999, { proto: "TLS", banner: null })                              // => "https" (banner fallback)
+detectService(3306, { proto: "TCP", banner: null })                              // => null    (MySQL — not tested)
 ```
 
 ---
@@ -926,7 +1027,9 @@ are found to minimise login noise and lockout risk.
 
 **Parameters:**
 - `host`        `{string}` — IP address or hostname of the target
-- `ports`       `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_8.9", "80": "TCP: HTTP/1.1 200 OK" }`
+- `ports`       `{object}` — port map from scan JSON; accepts both the current object format
+  `{ "22": { proto: "TCP", banner: "SSH-2.0-..." } }` and the legacy string format
+  `{ "22": "TCP: SSH-2.0-..." }`
 - `credentials` `{{ user: string, pass: string }[]}` — parsed wordlist from `parseWordlist()`
 
 **Returns:** `{Promise<{ found: object, honeypot: boolean }>}`
@@ -947,7 +1050,7 @@ are found to minimise login noise and lockout risk.
 
 **Example:**
 ```js
-const { found, honeypot } = await testHost("10.0.0.5", { "22": "TCP", "80": "TCP: HTTP/1.1 200 OK" }, creds);
+const { found, honeypot } = await testHost("10.0.0.5", { "22": { proto: "TCP", banner: "SSH-2.0-OpenSSH_8.9" }, "80": { proto: "TCP", banner: "HTTP/1.1 200 OK" } }, creds);
 // => { found: { "22": { user: "root", pass: "toor", service: "SSH" } }, honeypot: false }
 ```
 
@@ -981,6 +1084,90 @@ node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
 - The process does not require root — credential testing uses standard TCP connections only.
 - Missing optional packages (`ssh2`, `basic-ftp`, `axios`) print a warning but do not abort
   startup; affected protocol testers return `false` silently at runtime.
+
+---
+
+---
+
+---
+
+# enrich.js — Function Reference
+
+---
+
+## whoisLookup(ip)
+
+**Purpose:**
+Queries `whois.ripe.net` over a plain TCP connection on port 43 and returns the raw response text.
+RIPE NCC is the RIR for European IP space; most Hetzner addresses fall under RIPE.
+
+**Parameters:**
+- `ip` `{string}` — dotted-decimal IP address to look up
+
+**Returns:** `{Promise<string|null>}`
+- Raw WHOIS response text on success
+- `null` on connection failure or 5-second timeout
+
+**Notes:**
+- The query is the IP string followed by `\r\n`, per the WHOIS protocol (RFC 3912).
+- A 5-second hard timeout is applied regardless of how much data has arrived — RIPE responses
+  are small and complete well within this window.
+- Only queries RIPE. IPs assigned by ARIN, APNIC, LACNIC, or AFRINIC will return an empty or
+  referral response. `parseOwner` returns `"unknown"` in that case.
+
+**Example:**
+```js
+const raw = await whoisLookup("188.40.1.1");
+// => "% This is the RIPE Database...\ninetnum: ..."
+```
+
+---
+
+## parseOwner(raw)
+
+**Purpose:**
+Extracts the most human-readable owner name from a raw WHOIS response by checking a priority-ordered
+list of field names.
+
+**Parameters:**
+- `raw` `{string}` — raw WHOIS response text from `whoisLookup`; `null` is also accepted
+
+**Returns:** `{string}` — organisation or network name, or `"unknown"` if no recognised field was found
+
+**Notes:**
+- Fields are checked in order: `org-name` (most specific), `netname`, `descr` (most generic).
+  The first match wins.
+- The regex uses the `im` flags: `i` for case-insensitive field names, `m` for per-line `^` anchors.
+- Passing `null` returns `"unknown"` immediately without attempting a regex match.
+
+**Example:**
+```js
+parseOwner("org-name: Hetzner Online GmbH\nnetname: HETZNER-RZ\n");
+// => "Hetzner Online GmbH"
+```
+
+---
+
+## enrich.js — Entry Point
+
+**CLI syntax:**
+```
+node src/enrich.js <scan.json>
+```
+
+**Behaviour:**
+1. Reads the scan JSON file produced by `scanner.js`.
+2. For each host entry, calls `whoisLookup()` with the `host` IP and then `parseOwner()` on the
+   raw response.
+3. Writes the resolved name into `entry.owner`.
+4. Saves the updated JSON back to the same file after all hosts are processed.
+5. Prints a running `[done/total]` progress line to stdout.
+
+**Notes:**
+- Lookups run sequentially (one at a time) to avoid overwhelming `whois.ripe.net` with concurrent
+  TCP connections, which could result in rate-limiting or temporary blocks.
+- The file is overwritten in place. Run on a copy if you want to preserve the unenriched version.
+- Hosts for which `whoisLookup` returns `null` (timeout, unreachable) get `owner: "unknown"`.
 
 ---
 

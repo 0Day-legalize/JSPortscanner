@@ -44,8 +44,8 @@ CLI arguments
 │      │    jitter()      │  random inter-probe delay
 │      │    sendDecoys()  │  DECOY_COUNT spoofed SYN packets
 │      │    scanTCPPort() │
-│      │      tryTCPConnect(TLS)  ──► banner grab
-│      │      tryTCPConnect(TCP)  ──► banner grab (fallback)
+│      │      tryTLSConnect()  ──► banner grab + cert extraction + header parsing
+│      │      tryTCPConnect()  ──► banner grab (fallback)
 │      │                  │
 │      └─ UDP pool        │  runPool(udpTasks, MAX_UDP_CONNECTIONS)
 │           jitter()      │
@@ -55,7 +55,7 @@ CLI arguments
 │      onPortResult()     │  filters, prints, accumulates
 │      sort by port       │
 └──────────┬──────────────┘
-           │  { host, ports{}, scannedAt }[]
+           │  { host, hostname?, ports{}, scannedAt }[]
            ▼
 ┌─────────────────────────┐
 │   Output                │
@@ -67,11 +67,30 @@ CLI arguments
 │  scans/scan_<ts>.json   │  timestamped default path
 └──────────┬──────────────┘
            │
-           │  (optional — run manually as a second step)
+           │  (optional — run manually as subsequent steps)
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 2 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 2 — WHOIS ENRICHMENT  (src/enrich.js)             │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   For each host entry:  │
+│                         │
+│   whoisLookup()         │  TCP to whois.ripe.net:43
+│   parseOwner()          │  extracts org-name / netname / descr
+│                         │
+│   entry.owner = result  │  written back into each host entry
+└──────────┬──────────────┘
+           │  scan JSON updated in place
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 3 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -123,9 +142,14 @@ CLI arguments
 |---|---|
 | Ports scanned in shuffled order | Sequential scans are trivially detected by IDS/IPS |
 | Random inter-probe jitter | Uniform probe timing is a classic scanner fingerprint |
-| Random local source port per socket | Sequential local ports are another IDS signal |
+| Random local source port per socket | Sequential local ports are another IDS signal; used in decoy SYN packets via `buildSynPacket` |
 | Decoy SYN packets from private IPs | Floods IDS alert queues with spoofed origins before each real probe |
 | TLS attempted before plain TCP | A plaintext connect to a TLS port returns garbage; TLS-first gets useful data |
+| TLS connect split into `tryTLSConnect` | Allows cert extraction at `secureConnect` time, before the banner is written |
+| `extractCert` on every TLS connection | SANs and CN identify the host owner without a separate lookup |
+| `parseHeaders` on every HTTP response | Server, X-Powered-By, and CMS headers fingerprint the stack without additional probes |
+| `hostname` field on host results | PTR record stored so downstream tools know the resolved name without re-querying DNS |
+| WHOIS enrichment is a separate process | Owner lookup is slow and sequential; keeping it out of the scanner avoids blocking port probes |
 | PLAINTEXT_PORTS skip-list | Avoids wasted TLS handshake attempts on protocols that never negotiate TLS |
 | Incremental JSON flush (scanner) | Partial results are preserved if the process is interrupted |
 | Incremental JSON flush (credtest) | Cracked credentials are saved host-by-host; a crash loses at most one host |
@@ -147,6 +171,7 @@ CLI arguments
 PortScanner/
 ├── src/
 │   ├── scanner.js          Port scanner — all scan logic lives here
+│   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
 │   ├── credtest.js         Credential tester — runs after scanner produces output
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
 │   └── utils.js            Shared helpers — jitter() and runPool() used by scanner and credtest

@@ -9,16 +9,20 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | Feature | Details |
 |---|---|
 | TCP + TLS detection | Tries TLS first, falls back to plain TCP |
+| SSL certificate extraction | Captures CN, org, issuer, SANs, and expiry from TLS connections |
+| HTTP header parsing | Extracts Server, X-Powered-By, Content-Type, and other fingerprinting headers |
 | UDP scanning | Detects open and ICMP-confirmed closed ports |
 | Parallel scanning | 50 hosts in parallel, 50 TCP + 20 UDP workers per host |
 | Port shuffle | Fisher-Yates randomised scan order per host |
 | Jitter | Random 10–250ms delay before each probe |
-| Random source port | Breaks sequential local port fingerprint |
+| Random source port | Breaks sequential local port fingerprint in decoy packets |
 | Decoy IPs | Fires spoofed RFC1918 SYN packets before each real probe (requires root) |
 | CIDR support | Accepts `/16`–`/32` ranges in target file |
 | Resume-safe output | Results written after each host, survives early exit |
 | Banner grabbing | Captures first line of HTTP response per open port |
 | Rotating HTTP headers | Referer, Accept-Language, Cookie, User-Agent, and path rotated per probe |
+| PTR hostname | Reverse DNS lookup stored in `hostname` field when it differs from the IP |
+| WHOIS enrichment | Queries whois.ripe.net for each host and adds an `owner` field |
 | Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 | SIGINT handler | Ctrl+C flushes partial results before exit |
@@ -67,7 +71,22 @@ sudo node src/scanner.js 10.0.0.0/24 80 443
 sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 ```
 
-### Step 2 — Detect honeypots in scan results
+### Step 2 — Enrich results with WHOIS owner data (optional)
+
+```bash
+node src/enrich.js <scan.json>
+```
+
+Queries `whois.ripe.net` for each host IP and adds an `owner` field (organisation name, netname,
+or description) to every entry in the scan JSON. Results are written back into the same file.
+
+```bash
+node src/enrich.js scans/scan_1748476800000.json
+```
+
+---
+
+### Step 3 — Detect honeypots in scan results
 
 ```bash
 node src/honeypot.js <scan.json>
@@ -85,7 +104,7 @@ node src/honeypot.js scans/scan_1748476800000.json
 
 ---
 
-### Step 3 — Test credentials against scan results
+### Step 4 — Test credentials against scan results
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
@@ -145,12 +164,32 @@ After running `credtest.js`, successfully cracked ports are merged into the same
 [
   {
     "host": "192.168.1.1",
+    "hostname": "server1.example.com",
     "ports": {
-      "22":  "TCP: SSH-2.0-OpenSSH_8.9",
-      "80":  "TCP: HTTP/1.1 200 OK",
-      "443": "TLS"
+      "22": {
+        "proto": "TCP",
+        "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+      },
+      "80": {
+        "proto": "TCP",
+        "banner": "HTTP/1.1 200 OK",
+        "headers": { "server": "nginx/1.24.0" }
+      },
+      "443": {
+        "proto": "TLS",
+        "banner": "HTTP/1.1 200 OK",
+        "cert": {
+          "cn": "example.com",
+          "org": "Example Corp",
+          "issuer": "Let's Encrypt",
+          "sans": ["example.com", "www.example.com"],
+          "expires": "Jan  1 00:00:00 2027 GMT"
+        },
+        "headers": { "server": "nginx/1.24.0", "x-powered-by": "PHP/8.2" }
+      }
     },
     "scannedAt": "2026-05-29T12:00:00.000Z",
+    "owner": "Example Corp",
     "credentials": {
       "22": { "user": "admin", "pass": "password", "service": "SSH" },
       "80": { "user": "admin", "pass": "admin",    "service": "HTTP" }
@@ -183,6 +222,7 @@ Requires root for raw socket access. The scanner exits with an error if not run 
 PortScanner/
 ├── src/
 │   ├── scanner.js           Port scanner
+│   ├── enrich.js            WHOIS enrichment (adds owner field)
 │   ├── credtest.js          Credential tester
 │   ├── honeypot.js          Honeypot detector
 │   └── utils.js             Shared helpers (jitter, runPool)
