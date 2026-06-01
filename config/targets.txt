@@ -1,2 +1,2 @@
 # Target IP list — one host per line, # lines are ignored
-37.27.7.0/26
+37.27.7.128/26
