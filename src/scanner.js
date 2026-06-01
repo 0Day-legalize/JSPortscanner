@@ -210,10 +210,10 @@ function shufflePorts(firstPort, lastPort) {
  * @param {boolean} useTLS - If true, wraps the connection in TLS (HTTPS-style)
  * @returns {Promise<string|null>} Response text if connected, null if connection failed
  */
-function tryTCPConnect(host, port, useTLS) {
+function tryTCPConnect(host, port, useTLS, hostname) {
     return new Promise((resolve) => {
         const socket = useTLS
-            ? tls.connect({ host, port, rejectUnauthorized: false })
+            ? tls.connect({ host, port, rejectUnauthorized: false, servername: hostname })
             : net.createConnection({ host, port });
 
         let responseData = "";
@@ -223,7 +223,16 @@ function tryTCPConnect(host, port, useTLS) {
 
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             isConnected = true;
-            socket.write("HEAD / HTTP/1.0\r\nHost: " + host + "\r\nUser-Agent: Team Dangerous\r\nConnection: close\r\n\r\n");
+            // HTTP/1.1 with realistic browser headers blends in as normal traffic
+            socket.write(
+                `HEAD / HTTP/1.1\r\n` +
+                `Host: ${hostname}\r\n` +
+                `User-Agent: Team Dangerous\r\n` +
+                `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
+                `Accept-Language: en-US,en;q=0.5\r\n` +
+                `Accept-Encoding: gzip, deflate\r\n` +
+                `Connection: close\r\n\r\n`
+            );
         });
 
         socket.on("data",    (chunk) => { responseData += chunk.toString("utf8"); });
@@ -246,17 +255,17 @@ function tryTCPConnect(host, port, useTLS) {
  * @param {number} port - Port number to scan
  * @returns {Promise<{proto: string, port: number, data: string|null}>}
  */
-async function scanTCPPort(host, port) {
+async function scanTCPPort(host, port, hostname = host) {
     // Skip TLS entirely for ports known to speak plaintext
     if (PLAINTEXT_PORTS.has(port)) {
-        const response = await tryTCPConnect(host, port, false);
+        const response = await tryTCPConnect(host, port, false, hostname);
         return { proto: "TCP", port, data: response };
     }
 
-    const tlsResponse = await tryTCPConnect(host, port, true);
+    const tlsResponse = await tryTCPConnect(host, port, true, hostname);
 
     // Only try plain TCP if TLS got nothing — avoids a double connection on TLS ports
-    const tcpResponse = tlsResponse === null ? await tryTCPConnect(host, port, false) : null;
+    const tcpResponse = tlsResponse === null ? await tryTCPConnect(host, port, false, hostname) : null;
 
     const response = tlsResponse ?? tcpResponse;
     return { proto: tlsResponse === null ? "TCP" : "TLS", port, data: response };
@@ -372,6 +381,16 @@ async function scanHost(host, firstPort, lastPort) {
             : (await dns.lookup(host)).address;
     } catch { /* hostname unresolvable — decoys disabled for this host */ }
 
+    // Reverse DNS lookup — use the hostname in HTTP Host header so traffic
+    // looks like normal browsing rather than a direct IP probe
+    let resolvedHostname = host;
+    try {
+        if (resolvedIP) {
+            const hostnames = await dns.reverse(resolvedIP);
+            if (hostnames.length > 0) resolvedHostname = hostnames[0];
+        }
+    } catch { /* no PTR record — fall back to original host value */ }
+
     /**
      * Receives a single port result and keeps it only if the port is open.
      *
@@ -395,7 +414,7 @@ async function scanHost(host, firstPort, lastPort) {
     const tcpTasks = portList.map((port) => async () => {
         await jitter();
         if (resolvedIP) sendDecoys(resolvedIP, port);
-        return scanTCPPort(host, port);
+        return scanTCPPort(host, port, resolvedHostname);
     });
     const udpTasks = portList.map((port) => async () => { await jitter(); return scanUDPPort(host, port); });
 
