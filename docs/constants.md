@@ -203,6 +203,114 @@ triggering different countermeasures.
 
 ---
 
+### userAgents
+
+| Property | Value |
+|---|---|
+| Default | Five real browser UA strings (Chrome Windows, Chrome macOS, Firefox Linux, Firefox Windows, Safari macOS) |
+| Type | `string[]` |
+| Scope | `randomUA()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+
+**What it controls:**
+The pool of HTTP `User-Agent` header values rotated across probes. One string is picked at random
+for each banner-grab request.
+
+**Effect of adding an entry:**
+A wider pool makes the set of UA strings from a single scan run harder to correlate. New entries
+should be real, current browser UA strings — invented strings may match known-scanner signatures.
+
+**Effect of removing an entry:**
+Smaller pool increases the probability that consecutive probes share the same UA, weakening the
+rotation effect.
+
+---
+
+### httpPaths
+
+| Property | Value |
+|---|---|
+| Default | `["/", "/index.html", "/robots.txt", "/favicon.ico", "/sitemap.xml"]` |
+| Type | `string[]` |
+| Scope | `randomPath()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+
+**What it controls:**
+The pool of URL paths used in the HTTP HEAD request sent during banner grabbing. One path is picked
+at random for each probe.
+
+**Effect of adding an entry:**
+More path variety across probes. Paths should be common, innocuous URLs that a real browser would
+request — unusual paths could themselves be a scanner signal.
+
+**Effect of removing an entry:**
+Smaller pool; more repeated paths across a scan run.
+
+---
+
+### referers
+
+| Property | Value |
+|---|---|
+| Default | Google, Bing, DuckDuckGo, Reddit, t.co |
+| Type | `string[]` |
+| Scope | `randomReferer()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+
+**What it controls:**
+The pool of `Referer` header values rotated per probe. Simulates a user navigating to the target
+from a real search engine or social link rather than typing the URL directly (which produces no
+Referer) or arriving from a script (which sends no Referer or a synthetic one).
+
+**Effect of adding an entry:**
+Wider pool; more realistic variation in apparent traffic origin.
+
+**Effect of removing an entry:**
+Smaller pool; less variation.
+
+---
+
+### acceptLanguages
+
+| Property | Value |
+|---|---|
+| Default | en-US, de-DE, fr-FR, nl-NL, es-ES, pl-PL (each with quality weighting) |
+| Type | `string[]` |
+| Scope | `randomLanguage()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+
+**What it controls:**
+The pool of `Accept-Language` header values rotated per probe. Simulates requests originating from
+users in different locales — a realistic mix that a WAF or server log would associate with multiple
+distinct browser clients.
+
+**Effect of adding an entry:**
+More locale variation. Adding non-Latin-script locales (e.g. `zh-CN`) broadens the apparent
+geographic spread of requests.
+
+**Effect of removing an entry:**
+Smaller pool; less locale diversity.
+
+---
+
+### fakeCookies
+
+| Property | Value |
+|---|---|
+| Default | Four strings containing plausible session, GA, GID, and consent cookie patterns |
+| Type | `string[]` |
+| Scope | `randomCookie()` — picked once per TCP/TLS connection inside `tryTCPConnect` |
+
+**What it controls:**
+The pool of `Cookie` header values rotated per probe. Sending a plausible cookie string makes the
+request look like it comes from a browser that has previously visited the site, as opposed to a
+fresh scanner connection which carries no cookies at all.
+
+**Effect of adding an entry:**
+More variety in the cookie fingerprint across probes. Custom entries can mimic the cookie patterns
+of specific platforms (e.g. Cloudflare `__cf_bm`, WordPress `wordpress_logged_in`).
+
+**Effect of removing an entry:**
+Smaller pool; more repeated cookie values across a scan run.
+
+---
+
 ### plaintextPorts
 
 | Property | Value |
@@ -460,6 +568,145 @@ use non-standard field names (e.g. `{ "user": "j_username", "pass": "j_password"
 **Effect of removing an entry:**
 That combination of field names is skipped. If the target application uses those field names
 exclusively, its login form will not be tested successfully.
+
+---
+
+---
+
+## honeypot section
+
+Controls honeypot-detection behaviour in `src/honeypot.js`.
+
+---
+
+### suspiciousPortThreshold
+
+| Property | Value |
+|---|---|
+| Default | `6` |
+| Type | `number` (integer) |
+| Scope | `checkHost()` — compared against `openPorts.length` |
+
+**What it controls:**
+Minimum number of open ports required to trigger the "too many open ports" heuristic. Real servers
+rarely expose six or more distinct services simultaneously; honeypots are configured to answer on
+many ports to maximise attacker engagement.
+
+**Effect of increasing:**
+Fewer hosts flagged under this heuristic. Reduce false positives on servers that legitimately run
+many services (e.g. a combined web + database + mail server).
+
+**Effect of decreasing:**
+More hosts flagged. Setting to 3 or 4 will produce many false positives on ordinary multi-service
+hosts.
+
+---
+
+### telnetPort
+
+| Property | Value |
+|---|---|
+| Default | `23` |
+| Type | `number` |
+| Scope | `checkHost()` — checked with `openPorts.includes()` |
+
+**What it controls:**
+The port number that triggers the "Telnet open" heuristic. Telnet is effectively absent from
+legitimate modern infrastructure and is a near-certain honeypot indicator when present.
+
+**Effect of changing:**
+Only relevant if a deployment uses a non-standard Telnet port. No reason to change this in normal
+use.
+
+---
+
+### tpotPortCombo
+
+| Property | Value |
+|---|---|
+| Default | `[21, 22, 23, 25, 80, 443, 445]` |
+| Type | `number[]` (loaded as a `Set`) |
+| Scope | `checkHost()` — intersection with open ports |
+
+**What it controls:**
+The set of ports whose co-occurrence indicates a T-Pot honeypot installation. T-Pot runs multiple
+honeypot daemons (Cowrie, Dionaea, Conpot, etc.) simultaneously, which results in an unusually wide
+set of open ports from a single host.
+
+**Effect of adding a port:**
+A larger reference set means the intersection with `openPorts` can grow, but it can also reduce
+false positives if you remove a port that legitimate hosts commonly open (e.g. 80 or 443 alone is
+not suspicious).
+
+**Effect of removing a port:**
+Smaller reference set. Fewer potential matches; the threshold must be met with fewer ports.
+
+---
+
+### tpotMatchMin
+
+| Property | Value |
+|---|---|
+| Default | `4` |
+| Type | `number` (integer) |
+| Scope | `checkHost()` — minimum intersection size to trigger the T-Pot heuristic |
+
+**What it controls:**
+How many ports from `tpotPortCombo` must be open simultaneously before the T-Pot flag is raised.
+
+**Effect of increasing:**
+Stricter match — fewer false positives on hosts running a subset of these ports for legitimate
+reasons (web + SSH + SMTP is normal; web + SSH + SMTP + FTP + Telnet + SMB is not).
+
+**Effect of decreasing toward 1:**
+Any single port from the combo set would trigger a flag — produces many false positives.
+
+---
+
+### cowrieSSHBanners
+
+| Property | Value |
+|---|---|
+| Default | Six known Cowrie version strings (OpenSSH 5.3, 5.9p1, 6.0p1, 6.6.1p1, 6.7p1, 7.2p2 with Debian/Ubuntu suffixes) |
+| Type | `string[]` |
+| Scope | `checkHost()` — substring match against each SSH port's banner value |
+
+**What it controls:**
+The list of SSH banner strings that are known Cowrie default configurations. A match is a high-confidence
+honeypot indicator because these specific version + OS combinations are hard-coded defaults in
+Cowrie's configuration file and have not appeared in real-world OpenSSH packages for many years.
+
+**Effect of adding an entry:**
+New Cowrie default banners (from updated Cowrie versions or community-reported configurations) are
+detected. Check the Cowrie changelog and honeypot research feeds for new defaults.
+
+**Effect of removing an entry:**
+That specific banner string will fall through to the bare-suffix heuristic instead (which may still
+flag it, just with a lower-confidence message).
+
+---
+
+### sshDistroKeywords
+
+| Property | Value |
+|---|---|
+| Default | `["Ubuntu", "Debian", "RHEL", "CentOS", "Alpine", "FreeBSD"]` |
+| Type | `string[]` |
+| Scope | `SSH_DISTRO_SUFFIX` regex compiled at module load — tested against SSH banners not matched by `cowrieSSHBanners` |
+
+**What it controls:**
+The OS name strings that legitimate distro-packaged OpenSSH always appends to its version banner
+(e.g. `SSH-2.0-OpenSSH_9.3p1 Ubuntu-1ubuntu3.6`). A banner that matches `SSH-2.0-OpenSSH_x.y`
+but contains none of these keywords is flagged as a possible honeypot — Cowrie and similar tools
+often emit bare version strings with no OS suffix.
+
+**Effect of adding an entry:**
+A new OS keyword is accepted as a legitimate suffix. Add entries for distributions in your target
+environment if they use suffixes not in the default list (e.g. `Raspbian`, `NixOS`).
+
+**Effect of removing an entry:**
+SSH banners from that OS distribution will be flagged as suspicious. Only remove entries for OS
+strings known to appear in honeypot configurations.
 
 ---
 

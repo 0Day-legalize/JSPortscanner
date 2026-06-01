@@ -524,56 +524,146 @@ parseTargetFile("config/targets.txt");
 
 ---
 
+---
+
+# utils.js — Function Reference
+
+Both functions are exported and imported by `scanner.js` and `credtest.js`.
+
+---
+
+## jitter(min, max)
+
+**Purpose:**
+Pauses execution for a uniformly random number of milliseconds in the range `[min, max]`.
+Injecting a random pause between probes or attempts prevents a scanner from producing a flat,
+detectable probe-rate distribution.
+
+**Parameters:**
+- `min` `{number}` — minimum delay in milliseconds (inclusive)
+- `max` `{number}` — maximum delay in milliseconds (inclusive)
+
+**Returns:** `{Promise<void>}`
+
+**Notes:**
+- The distribution is uniform, not Gaussian — a Gaussian clusters around its mean and can still
+  be statistically fingerprinted with enough samples.
+- `scanner.js` calls it with `J_MIN = 10` / `J_MAX = 250`. `credtest.js` calls it with
+  `JITTER_MIN_MS = 500` / `JITTER_MAX_MS = 2000`. The wider range in credtest keeps login
+  attempt rates below account lockout thresholds.
+
+**Example:**
+```js
+await jitter(10, 250);   // scanner — fast, wide
+await jitter(500, 2000); // credtest — slow, wide
+```
+
+---
+
+## runPool(tasks, limit, onDone)
+
+**Purpose:**
+Executes an array of async tasks with a bounded concurrency limit. Without this, mapping tens of
+thousands of ports to parallel promises would immediately exhaust OS file descriptors and flood the
+network.
+
+**Parameters:**
+- `tasks`  `{Array<() => Promise<any>>}` — zero-argument factory functions; not started until a worker picks them up
+- `limit`  `{number}` — maximum number of tasks to run concurrently
+- `onDone` `{(result: any) => void}` — called synchronously with each task's resolved value as soon as it completes
+
+**Returns:** `{Promise<void>}` — resolves only after every task has completed
+
+**Notes:**
+- Workers share a single `i` counter. Each worker reads and increments it atomically in the same
+  synchronous step (`tasks[i++]()`), so tasks are never duplicated or skipped. This is safe because
+  JavaScript is single-threaded — there is no race on `i`.
+- `Math.min(limit, tasks.length)` avoids spawning more workers than tasks, which would leave idle
+  workers looping forever on a depleted queue.
+- `onDone` fires in completion order, not submission order. Callers that need ordered output must
+  sort afterwards (as `scanHost` does).
+- Rejected task promises propagate through `worker()` and cause `Promise.all` to reject. All task
+  functions in the scanner and credtest handle errors internally and never reject.
+
+**Example:**
+```js
+const tasks = ports.map((p) => () => scanTCPPort(host, p));
+await runPool(tasks, 50, ({ port, data }) => {
+    if (data !== null) console.log(`${port} open`);
+});
+```
+
+---
+
+---
+
+# honeypot.js — Function Reference
+
+---
+
+## checkHost(ports)
+
+**Purpose:**
+Inspects the open ports and banners of a single host and returns a list of reasons it may be a
+honeypot. Returns an empty array if nothing suspicious is found.
+
+**Parameters:**
+- `ports` `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" }`
+
+**Returns:** `{string[]}` — human-readable reason strings, one per triggered heuristic; empty array if clean
+
+**Notes:**
+- Four independent heuristics are checked in order: known Cowrie banners, bare SSH version strings
+  with no OS suffix, open Telnet (port 23), T-Pot port combination, and suspiciously many open ports.
+- The Cowrie exact-match check (`COWRIE_SSH_BANNERS`) runs before the bare-suffix check and uses
+  `continue` to skip the suffix check on the same port — avoiding a duplicate reason for the same
+  port when both would match.
+- `SSH_DISTRO_SUFFIX` is a compiled `RegExp` built at module load from `cfg.sshDistroKeywords`. Real
+  distro-packaged OpenSSH always appends an OS string (e.g. `Ubuntu-4ubuntu2.2`) — its absence is
+  a reliable Cowrie tell for versions not in the exact-match list.
+- `TPOT_MATCH_MIN` (default 4) means at least 4 ports from the T-Pot set must be open before the
+  combination is flagged, reducing false positives on hosts that legitimately run web + SSH + FTP.
+- `SUSPICIOUS_THRESHOLD` (default 6) is intentionally low — real servers rarely expose that many
+  services simultaneously.
+
+**Example:**
+```js
+checkHost({ "22": "TCP: SSH-2.0-OpenSSH_5.3", "23": "TCP" });
+// => [
+//      'Cowrie SSH banner on port 22: "SSH-2.0-OpenSSH_5.3"',
+//      "Telnet (port 23) open — almost always a honeypot on modern networks"
+//    ]
+```
+
+---
+
+## honeypot.js — Entry Point
+
+**CLI syntax:**
+```
+node src/honeypot.js <scan.json>
+```
+
+**Behaviour:**
+1. Reads the scan JSON file produced by `scanner.js`.
+2. Calls `checkHost()` for every entry.
+3. Writes `{ suspected: true, reasons: [...] }` or `{ suspected: false }` back into each entry
+   under a `honeypot` key.
+4. Saves the updated JSON back to the same file.
+5. Prints a summary count of flagged hosts.
+
+**Notes:**
+- All detection thresholds and banner lists are loaded from `config/settings.json` under the
+  `honeypot` key — nothing is hard-coded in the source.
+- The file is overwritten in place. Run on a copy if you want to preserve the original scan output.
+
+---
+
 # credtest.js — Function Reference
 
 All functions below are defined in `src/credtest.js`. They are listed in the order they appear in the file.
 
 ---
-
-## jitter() — credtest
-
-**Purpose:**
-Pauses execution for a random duration between `JITTER_MIN_MS` (500ms) and `JITTER_MAX_MS` (2000ms).
-The wider range compared to the scanner's jitter is deliberate — login attempts must stay well below
-the threshold that triggers account lockout policies, which typically activate at multiple attempts
-within a few seconds.
-
-**Parameters:** none
-
-**Returns:** `{Promise<void>}`
-
-**Notes:**
-- Called before every individual credential attempt, not once per wordlist entry per host.
-- With `CRED_CONCURRENCY = 3` workers and a mean delay of 1250ms, the effective attempt rate is
-  roughly `3 / 1250ms ≈ 2.4 attempts/sec` per port — well under most lockout thresholds.
-- The delay distribution is uniform, not Gaussian, for the same reason as in `scanner.js`.
-
-**Example:**
-```js
-await jitter(); // waits between 500ms and 2000ms
-await trySSH(host, port, user, pass);
-```
-
----
-
-## runPool(taskList, workerLimit, onTaskDone) — credtest
-
-**Purpose:**
-Identical in behaviour to `runPool` in `scanner.js` — executes async tasks with a bounded
-concurrency limit. Duplicated here so `credtest.js` has no import dependency on `scanner.js`.
-
-**Parameters:**
-- `taskList`    `{Array<() => Promise<any>>}` — zero-argument factory functions; not started until a worker picks them up
-- `workerLimit` `{number}` — maximum concurrent tasks
-- `onTaskDone`  `{(result: any) => void}` — called with each task's resolved value on completion
-
-**Returns:** `{Promise<void>}` — resolves after every task completes
-
-**Notes:**
-- See the `runPool` entry in the scanner section for a full explanation of the shared-counter
-  worker model and why it is safe in a single-threaded runtime.
-- `CRED_CONCURRENCY` (default 3) is deliberately much lower than `MAX_TCP_CONNECTIONS` (50) because
-  excessive parallel login attempts are more likely to trigger lockouts than FD exhaustion.
 
 ---
 
@@ -648,9 +738,9 @@ if (ok) console.log("FTP login succeeded");
 
 **Purpose:**
 Submits a credential pair as a form POST across every combination of common login endpoints and
-field name sets. Treats a 302 redirect response with no failure-indicator text in the body as a
-successful login. Covers the most common web login patterns without requiring prior knowledge of
-the application.
+field name sets. Treats a 301–303 redirect response, or a 200 response with no error keywords in
+the body, as a successful login. Covers the most common web login patterns without requiring prior
+knowledge of the application.
 
 **Parameters:**
 - `host`      `{string}`  — target IP address or hostname
@@ -665,15 +755,15 @@ the application.
 - Returns `false` immediately if `axios` was not installed.
 - Endpoints and field name pairs are driven by `HTTP_ENDPOINTS` and `HTTP_FIELDS` from `settings.json`,
   so new login paths or field names can be added without touching this function.
-- `maxRedirects: 0` prevents axios from following the redirect. The 302 itself is the success
+- `maxRedirects: 0` prevents axios from following the redirect. The 3xx status itself is the success
   signal; following it would lose the status code needed for detection.
 - `validateStatus: (s) => s < 500` tells axios to resolve (not reject) for all non-5xx responses,
-  including 302 and 4xx, so catch blocks are only reached on network errors.
-- The body-text check (`invalid`, `incorrect`, `failed`) guards against login pages that return 302
-  even on bad credentials by redirecting back to the login form with an error message in the
-  response body.
-- `httpsAgent` is constructed inline per-call rather than shared because `import("node:https")` is
-  dynamic and the agent's `rejectUnauthorized: false` option must apply per-request.
+  including 3xx and 4xx, so catch blocks are only reached on network errors.
+- A 200 with no error keywords (`invalid`, `incorrect`, `failed`, `wrong`, `error`, `denied`) in the
+  lowercased response body is also treated as a success — covers login forms that return 200 + an
+  error message on failure rather than a redirect.
+- `httpsAgent` is a module-level singleton constructed once at startup. Reusing it across requests
+  avoids repeated TLS context creation overhead and socket pool fragmentation.
 
 **Example:**
 ```js
@@ -765,24 +855,25 @@ are found to minimise login noise and lockout risk.
 - `ports`       `{object}` — port map from scan JSON, e.g. `{ "22": "TCP: SSH-2.0-OpenSSH_8.9", "80": "TCP: HTTP/1.1 200 OK" }`
 - `credentials` `{{ user: string, pass: string }[]}` — parsed wordlist from `parseWordlist()`
 
-**Returns:** `{Promise<object>}` — map of port string → `{ user, pass, service }` for every successful login; empty object if none succeed
+**Returns:** `{Promise<{ found: object, honeypot: boolean }>}`
+- `found` — map of port string → `{ user, pass, service }` for every successful login; empty object if none succeed
+- `honeypot` — `true` if the very first credential attempt on any port was accepted (classic honeypot tell)
 
 **Notes:**
-- The `cracked` flag is set to `true` the moment a valid credential is found and checked at the
-  start of each task. Tasks that are already queued but have not started yet will exit immediately
-  when they read `cracked = true`. Tasks already in flight are not cancelled — they run to
-  completion but their results are discarded.
+- The `abort` controller is signalled the moment a valid credential is found. Tasks that have not
+  started yet return immediately; tasks already in flight run to completion but discard their result.
 - Port iteration is sequential (a standard `for...of` loop). All concurrency is within a single
   port's wordlist run. This is intentional: parallelising across ports would multiply the per-port
   attempt rate by the number of ports, making lockouts more likely.
-- The `\r\x1b[K` escape before logging a hit erases the rolling progress line so the hit message
-  is never visually truncated.
+- The `firstAttempt` flag is reset to `true` at the start of each port's wordlist run. A hit on the
+  very first credential of any port sets `honeypot = true` and marks the result with
+  `{ honeypot: true }` so the caller can surface it separately.
 - Successful results are keyed by port string (e.g. `"22"`) to match the key format in the scan
   JSON, making the merge at the entry point a direct property assignment.
 
 **Example:**
 ```js
-const hits = await testHost("10.0.0.5", { "22": "TCP", "80": "TCP: HTTP/1.1 200 OK" }, creds);
+const { found, honeypot } = await testHost("10.0.0.5", { "22": "TCP", "80": "TCP: HTTP/1.1 200 OK" }, creds);
 // => { found: { "22": { user: "root", pass: "toor", service: "SSH" } }, honeypot: false }
 ```
 
@@ -812,6 +903,7 @@ node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
    one host's results.
 
 **Notes:**
+- `jitter` and `runPool` are imported from `src/utils.js` — they are not duplicated in this file.
 - The process does not require root — credential testing uses standard TCP connections only.
 - Missing optional packages (`ssh2`, `basic-ftp`, `axios`) print a warning but do not abort
   startup; affected protocol testers return `false` silently at runtime.

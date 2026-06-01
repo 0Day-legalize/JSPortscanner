@@ -222,39 +222,50 @@ value.
 On every successful TCP or TLS connection the scanner sends:
 
 ```
-HEAD / HTTP/1.1
+HEAD <random-path> HTTP/1.1
 Host: <ptr-resolved-hostname>
-User-Agent: Team Dangerous
+User-Agent: <random-ua>
 Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
-Accept-Language: en-US,en;q=0.5
+Accept-Language: <random-accept-language>
 Accept-Encoding: gzip, deflate
+Referer: <random-referer>
+Cookie: <random-fake-cookie>
 Connection: close
 ```
+
+Every header drawn from a pool is independently re-randomised per probe from the `userAgents`,
+`acceptLanguages`, `referers`, and `fakeCookies` lists in `settings.json`.
 
 The `Host` value is the result of a reverse DNS (PTR) lookup on the target IP. If no PTR record
 exists, or if the IP could not be resolved, the IP address itself is used as a fallback.
 
 **Why it helps:**
-Two independent techniques combine here:
+Four independent techniques combine here:
 
 1. **Realistic HTTP/1.1 headers.** A scanner sending a bare `HEAD / HTTP/1.0\r\n\r\n` is
    immediately recognisable. Sending a full HTTP/1.1 request with `Accept`, `Accept-Language`,
-   and `Accept-Encoding` headers matches the profile of a real browser — most WAF
-   heuristics filter on header completeness as well as User-Agent string.
+   `Accept-Encoding`, `Referer`, and `Cookie` headers matches the profile of a real browser — most
+   WAF heuristics filter on header completeness as well as User-Agent string.
 
 2. **PTR hostname in the Host header.** Web servers and reverse proxies log the `Host` header
    for virtual-host routing. A request with `Host: <real-hostname>` looks like a browser that
    resolved the hostname via DNS and then connected directly. A request with `Host: 10.0.0.5`
    (a bare IP) is an immediate signal of programmatic access, not human browsing.
 
-3. **Custom User-Agent.** Default scanner strings (`Nmap`, `masscan`, `python-requests/2.x.x`,
-   `Go-http-client`) are present in most WAF and IDS rule sets. `"Team Dangerous"` matches no
-   known-scanner signature rule.
+3. **Rotating User-Agent from a pool.** Default scanner strings (`Nmap`, `masscan`,
+   `python-requests/2.x.x`, `Go-http-client`) are present in most WAF and IDS rule sets. The
+   `userAgents` list contains real browser UA strings. Because the UA rotates per probe, all
+   requests from the same scan run look like different browser clients.
+
+4. **Per-probe header rotation.** `Referer`, `Accept-Language`, `Cookie`, and the request path are
+   independently re-randomised for every probe from their respective pools in `settings.json`. A
+   scanner that always sends the same headers is trivially identified by WAF correlation rules that
+   spot repeated identical request fingerprints from the same source IP.
 
 | Scenario | What a WAF / server log shows |
 |---|---|
 | Naive scanner | `HEAD / HTTP/1.0` from bare IP, no Host header → matches "scanner" heuristic |
-| This scanner | Full HTTP/1.1 request with PTR hostname, realistic headers → resembles browser traffic |
+| This scanner | Full HTTP/1.1 request with PTR hostname, per-probe rotating headers → resembles browser traffic |
 
 **Gotchas:**
 - The User-Agent only matters when the target speaks HTTP/HTTPS. For all other services (SSH, FTP,

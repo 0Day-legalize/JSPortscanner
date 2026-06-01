@@ -134,6 +134,10 @@ CLI arguments
 | `cracked` flag stops the wordlist on first hit | Avoids unnecessary login noise after success; most services lock accounts after N failures |
 | `raw-socket` loaded optionally | Scanner still functions (without decoys) when not running as root |
 | Optional npm dependencies in credtest | Missing ssh2/basic-ftp/axios disables that protocol without crashing the tool |
+| `jitter` and `runPool` extracted to `utils.js` | Eliminates the previously duplicated implementations between scanner and credtest |
+| SIGINT handler in scanner | Ctrl+C flushes the in-progress results array to disk before the process exits, preserving partial scans |
+| Port validation at startup | NaN, out-of-range, or inverted port arguments exit early with a clear error rather than producing an empty or corrupt scan |
+| Rotating Referer, Accept-Language, Cookie per probe | Each HTTP banner probe uses a different randomly chosen value from the configured lists, making all probes from the same scan look like different browser sessions |
 
 ---
 
@@ -143,9 +147,11 @@ CLI arguments
 PortScanner/
 ├── src/
 │   ├── scanner.js          Port scanner — all scan logic lives here
-│   └── credtest.js         Credential tester — runs after scanner produces output
+│   ├── credtest.js         Credential tester — runs after scanner produces output
+│   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
+│   └── utils.js            Shared helpers — jitter() and runPool() used by scanner and credtest
 ├── config/
-│   ├── settings.json       Tunable parameters for both scanner and credtest
+│   ├── settings.json       Tunable parameters for scanner, credtest, and honeypot
 │   ├── targets.txt         Default target list (IPs, hostnames, CIDRs)
 │   └── wordlist.txt        Default credential wordlist (username:password)
 ├── scans/                  JSON output directory (auto-created at runtime)

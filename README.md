@@ -18,7 +18,10 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | CIDR support | Accepts `/16`–`/32` ranges in target file |
 | Resume-safe output | Results written after each host, survives early exit |
 | Banner grabbing | Captures first line of HTTP response per open port |
+| Rotating HTTP headers | Referer, Accept-Language, Cookie, User-Agent, and path rotated per probe |
+| Honeypot detection | Flags Cowrie banners, T-Pot port combos, Telnet, and bare SSH version strings |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
+| SIGINT handler | Ctrl+C flushes partial results before exit |
 
 ---
 
@@ -64,7 +67,23 @@ sudo node src/scanner.js 10.0.0.0/24 80 443
 sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 ```
 
-### Step 2 — Test credentials against scan results
+### Step 2 — Detect honeypots in scan results
+
+```bash
+node src/honeypot.js <scan.json>
+```
+
+Reads the scan JSON produced by the scanner and flags suspected honeypots based on Cowrie SSH
+banners, T-Pot port combinations, open Telnet, bare SSH version strings (no OS suffix), and
+suspiciously many open ports. Results are written back into the same JSON under a `honeypot` field.
+
+```bash
+node src/honeypot.js scans/scan_1748476800000.json
+```
+
+---
+
+### Step 3 — Test credentials against scan results
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
@@ -162,9 +181,11 @@ Requires root for raw socket access. The scanner exits with an error if not run 
 PortScanner/
 ├── src/
 │   ├── scanner.js           Port scanner
-│   └── credtest.js          Credential tester
+│   ├── credtest.js          Credential tester
+│   ├── honeypot.js          Honeypot detector
+│   └── utils.js             Shared helpers (jitter, runPool)
 ├── config/
-│   ├── settings.json        Tunable parameters for scanner and credtest
+│   ├── settings.json        Tunable parameters for scanner, credtest, and honeypot
 │   ├── targets.txt          Default target list (IPs, hostnames, CIDRs)
 │   └── wordlist.txt         Default credential wordlist (username:password)
 ├── scans/                   Scan output (gitignored)
