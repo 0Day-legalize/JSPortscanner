@@ -283,7 +283,7 @@ const scanFile = positional[0] || null;
 const outFile  = positional[1] || null;
 const minPorts = (() => { const f = args.find(a => a.startsWith("--min-ports=")); return f ? Number(f.split("=")[1]) : 0; })();
 
-if (args.includes("--help") || args.includes("-h") || !scanFile) {
+if (args.includes("--help") || args.includes("-h")) {
     console.log(`
   RCN Report Generator
 
@@ -292,13 +292,19 @@ if (args.includes("--help") || args.includes("-h") || !scanFile) {
 
   flags:
     --min-ports=N     only include hosts with N or more open ports
+    --help / -h       show this help
 
   examples:
     node src/report.js scans/results.json
     node src/report.js scans/results.json report.html
     node src/report.js scans/results.json ~/report.html --min-ports=6
 `);
-    process.exit(scanFile ? 0 : 1);
+    process.exit(0);
+}
+
+if (!scanFile) {
+    console.error("usage: node src/report.js <scan.json> [output.html] [--min-ports=N]");
+    process.exit(1);
 }
 
 let data = JSON.parse(fs.readFileSync(scanFile, "utf8"));

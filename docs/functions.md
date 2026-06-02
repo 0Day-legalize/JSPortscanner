@@ -727,9 +727,9 @@ multiple targets.
   `host` argument, keeping the JSON compact for hosts with no PTR record.
 - `onPortResult` is an inner function rather than a top-level one because it closes over
   `openPorts` and `host`, keeping the per-host result accumulation self-contained.
-- TCP and UDP pools run with `Promise.all`, meaning both start simultaneously and `scanHost`
-  resolves only after both finish. This halves elapsed time compared to running TCP then UDP
-  sequentially.
+- The UDP pool is only started when `--udp` is active. Without the flag, only the TCP pool runs.
+  When both pools are active they run concurrently via `Promise.all`, so elapsed time is determined
+  by whichever pool takes longer, not the sum of both.
 - Results are sorted after both pools complete so the final JSON is deterministically ordered
   regardless of which port resolved first.
 
@@ -1256,7 +1256,7 @@ const { found, honeypot } = await testHost("10.0.0.5", { "22": { proto: "TCP", b
 
 **CLI syntax:**
 ```
-node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
+node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http] [--help]
 ```
 
 **Argument parsing:**
@@ -1264,6 +1264,8 @@ node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
 - `args[1]` (`wordlistFile`) — path to a `username:password` wordlist
 - `args.find(a => a.startsWith("--hosts="))` — optional filter; comma-separated list of IP
   addresses to restrict testing to a subset of the scan results
+- `args.includes("--no-http")` (`noHTTP`) — when present, `detectService` will not classify any
+  port as `"http"` or `"https"`, so `tryHTTP` is never called for this run
 
 **Behaviour:**
 1. Parses `--hosts=` from the raw `process.argv` array; all other args are positional.
@@ -1525,7 +1527,8 @@ node src/report.js --help
   regardless of where flags appear in the command line.
 - Omitting `--min-ports` (or setting N to 0) includes all hosts; no filtering step is run.
 - The process exits with code `1` when called with no arguments so that shell pipelines and
-  scripts can detect a missing operand. `--help` with a valid `scanFile` exits with code `0`.
+  scripts can detect a missing operand. `--help` or `-h` always exits with code `0`, regardless
+  of whether a `scanFile` argument is present.
 - No root or special privileges are required — the script only reads and writes ordinary files.
 
 ---
@@ -1642,6 +1645,11 @@ node src/vulnscan.js --help
   unchanged.
 - The script modifies the scan JSON in place. Run on a copy if you want to preserve the
   unenriched version.
+- Ubuntu/Debian packages backport security patches without bumping the version number (e.g.
+  `OpenSSH_8.2p1 Ubuntu-4ubuntu0.13` contains patches from 9.x). CVE results for distro-packaged
+  software on those banners may be false positives. A runtime note is printed to stdout to remind
+  the user.
+- NVD API reference: https://nvd.nist.gov/developers/vulnerabilities
 
 ---
 

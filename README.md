@@ -56,7 +56,7 @@ npm install
 ### Step 1 — Scan for open ports
 
 ```bash
-sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow] [--syn]
+sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow] [--syn] [--udp]
 ```
 
 `<target>` can be a **targets file**, a **single IP**, or a **CIDR block**.
@@ -65,6 +65,7 @@ sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow]
 |---|---|
 | `--slow` | 5 concurrent hosts, 10 TCP connections per host, 5–60s jitter — for low-noise scans |
 | `--syn` | Half-open SYN scan — TCP probes never complete the handshake, so application daemons (SSH, NGINX, Apache, Cowrie) write no log entry. Requires root and the `raw-socket` package. Results have `proto: "SYN"` and no banner, cert, or headers |
+| `--udp` | Also scan UDP ports (off by default — slow and rarely useful on most targets) |
 
 Flags can be combined: `--syn --slow`
 
@@ -150,14 +151,16 @@ node src/vulnscan.js scans/scan_1748476800000.json
 ### Step 5 — Test credentials against scan results (optional)
 
 ```bash
-node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
+node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http]
 ```
 
 Pass the JSON file produced by the scanner and a wordlist of `username:password` pairs.
 Credentials that succeed are written back into the same JSON file under a `credentials` field.
 
-The optional `--hosts` flag restricts testing to a comma-separated list of IPs from the scan file.
-Without it, every host in the scan file is tested.
+| Flag | Effect |
+|---|---|
+| `--hosts=ip1,ip2,...` | Restrict testing to a comma-separated list of IPs from the scan file. Without it, every host is tested |
+| `--no-http` | Skip HTTP/HTTPS credential testing. Useful when the scan contains many web ports and HTTP success detection produces false positives |
 
 ```bash
 # Test all hosts with the default wordlist
@@ -168,6 +171,9 @@ node src/credtest.js scans/results.json /path/to/passwords.txt
 
 # Test only specific hosts from the scan
 node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,192.168.1.5
+
+# Skip HTTP/HTTPS testing
+node src/credtest.js scans/results.json config/wordlist.txt --no-http
 ```
 
 ---

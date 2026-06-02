@@ -313,6 +313,30 @@ Smaller pool; more repeated cookie values across a scan run.
 
 ---
 
+### connectionReuseRequests
+
+| Property | Value |
+|---|---|
+| Default | `1` |
+| Type | `number` (integer) |
+| Scope | `tryTCPConnect` / `tryTLSConnect` — number of HTTP HEAD requests sent on a single keep-alive connection before closing |
+
+**What it controls:**
+How many HTTP HEAD requests are pipelined on the same TCP/TLS connection per banner-grab probe.
+At `1` each probe opens one connection, sends one request, and reads the response — no keep-alive
+pipelining occurs. Values above `1` send that many requests on the same socket, with
+`Connection: keep-alive` on all but the last.
+
+**Effect of increasing:**
+More requests per connection. Useful for extracting rotating headers from servers that vary their
+response across requests, but increases per-host connection duration and banner-grab latency.
+
+**Effect of decreasing to 1:**
+One request per connection — minimum traffic, minimum latency, no risk of server-side
+connection-reuse limits cutting the probe short.
+
+---
+
 ### passiveBannerPorts
 
 | Property | Value |

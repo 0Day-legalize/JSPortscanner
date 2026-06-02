@@ -122,9 +122,13 @@ if (process.argv.includes("--help") || process.argv.includes("-h") || !scanFile)
     queries the NVD API for matching CVEs, and writes results
     back into the scan JSON under a "cves" field per port.
 
-  note:
-    NVD rate-limits unauthenticated requests to ~5/30s.
-    scans with many open ports will take a few minutes.
+  flags:
+    --help / -h       show this help
+
+  notes:
+    - NVD rate-limits unauthenticated requests to ~5/30s — large scans take a few minutes
+    - Ubuntu/Debian banners report older versions with backported patches — CVEs may be false positives
+    - API reference: https://nvd.nist.gov/developers/vulnerabilities
 
   example:
     node src/vulnscan.js scans/results.json
