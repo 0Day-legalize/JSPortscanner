@@ -826,7 +826,7 @@ function renderBar() {
         eta = `  eta ${formatETA(remaining)}`;
     }
 
-    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  * ${hits}${eta}`);
+    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  ${hits} open${eta}`);
 }
 
 function onPortProgress() {
