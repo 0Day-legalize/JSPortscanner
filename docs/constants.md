@@ -313,36 +313,6 @@ Smaller pool; more repeated cookie values across a scan run.
 
 ---
 
-### plaintextPorts
-
-| Property | Value |
-|---|---|
-| Default | `[21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]` |
-| Type | `number[]` |
-| Scope | Documentation-only — not read by `scanner.js` at runtime |
-
-**What it controls:**
-Reference list of TCP ports that speak plaintext protocols and should not receive a TLS probe.
-This field is no longer read at runtime; `passiveBannerPorts` and `smtpPorts` are the active
-dispatch sets in `scanTCPPort()`.
-
-| Port | Protocol | Reason listed |
-|---|---|---|
-| 21 | FTP | FTPS uses explicit in-band upgrade (`AUTH TLS`), not TLS-on-connect |
-| 22 | SSH | Custom binary framing; a TLS ClientHello produces a visible protocol error in sshd logs |
-| 23 | Telnet | Plaintext by design |
-| 25 | SMTP | Uses STARTTLS for opportunistic upgrade, not TLS-on-connect |
-| 53 | DNS | Plaintext; DNS-over-TLS runs on port 853, not 53 |
-| 3306 | MySQL | Plaintext by default; TLS is opt-in via capability flags |
-| 5432 | PostgreSQL | Same STARTTLS-style upgrade as MySQL |
-| 6379 | Redis | Plaintext by default; TLS is a compile-time option rarely enabled |
-| 27017 | MongoDB | Plaintext by default |
-
-The active runtime equivalents of this list are `passiveBannerPorts` and `smtpPorts`. Editing
-`plaintextPorts` has no effect on scanning behaviour.
-
----
-
 ### passiveBannerPorts
 
 | Property | Value |
@@ -389,15 +359,40 @@ in the service log and waste a connection slot on a failed TLS handshake.
 | Scope | `SMTP_PORTS` — second dispatch check in `scanTCPPort()`, after `passiveBannerPorts` |
 
 **What it controls:**
-TCP ports that are handed to `probeSMTP`, which performs a proper EHLO exchange (waits for the
-`220` greeting, sends `EHLO mail.example.com`, collects the capability reply). A bare TCP read
-or HTTP probe against SMTP would log a protocol error and yield less information.
+TCP ports that are handed to `probeSMTP(host, port, false)`, which performs a proper EHLO exchange
+over a plain TCP connection (waits for the `220` greeting, sends `EHLO mail.example.com`, collects
+the capability reply). A bare TCP read or HTTP probe against SMTP would log a protocol error and
+yield less information.
 
 **Effect of adding a port:**
-Non-standard SMTP deployments (e.g. port 2525) receive the EHLO probe instead of an HTTP request.
+Non-standard SMTP deployments (e.g. port 2525) receive the plain-TCP EHLO probe instead of an
+HTTP request.
 
 **Effect of removing a port:**
 That port falls through to the TLS-first HTTP strategy, which will produce errors in the SMTP log.
+
+---
+
+### smtpsTLSPorts
+
+| Property | Value |
+|---|---|
+| Default | `[465]` |
+| Type | `number[]` (loaded as a `Set`) |
+| Scope | `SMTPS_PORTS` — third dispatch check in `scanTCPPort()`, after `smtpPorts` |
+
+**What it controls:**
+TCP ports that are handed to `probeSMTP(host, port, true)`, which performs the same EHLO exchange
+as `smtpPorts` but wraps the connection in implicit TLS first (SMTPS). Port 465 is the standard
+SMTPS port; the TLS handshake must complete before any SMTP data flows, unlike STARTTLS on ports
+25/587 which upgrades an existing plain connection.
+
+**Effect of adding a port:**
+Non-standard SMTPS deployments receive the implicit-TLS EHLO probe.
+
+**Effect of removing a port:**
+That port falls through to the TLS-first HTTP strategy, which will produce SMTP protocol errors
+in the service log.
 
 ---
 

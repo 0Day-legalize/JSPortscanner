@@ -267,23 +267,30 @@ const banner = await probeBannerOnly("10.0.0.1", 22);
 
 ---
 
-## probeSMTP(host, port)
+## probeSMTP(host, port, useTLS)
 
 **Purpose:**
-Opens a plain TCP connection to an SMTP port, waits for the `220` greeting, sends `EHLO`, and
-collects the capability response. A raw TCP or HTTP probe against SMTP would log a protocol error;
-the EHLO exchange is the minimum correct interaction that elicits service information.
+Opens a TCP connection (or implicit TLS connection) to an SMTP port, waits for the `220` greeting,
+sends `EHLO`, and collects the capability response. A raw TCP or HTTP probe against SMTP would log
+a protocol error; the EHLO exchange is the minimum correct interaction that elicits service
+information.
 
 **Parameters:**
-- `host` `{string}` — IP address or hostname to connect to
-- `port` `{number}` — SMTP port number (typically 25 or 587)
+- `host`   `{string}`  — IP address or hostname to connect to
+- `port`   `{number}`  — SMTP port number (25, 465, or 587)
+- `useTLS` `{boolean}` — when `true`, wraps the connection in TLS before the SMTP exchange; used
+  for implicit TLS (SMTPS) on port 465. Defaults to `false`.
 
 **Returns:** `{Promise<string|null>}`
 - Full accumulated response (greeting + EHLO reply) if the exchange completed
 - `null` on connection failure, timeout, or missing greeting
 
 **Notes:**
-- Ports dispatched here are defined in `SMTP_PORTS` (`smtpPorts` in `settings.json`): 25 and 587.
+- Plain SMTP ports (25, 587) are dispatched here from `SMTP_PORTS`; `useTLS` is `false`.
+- Port 465 (SMTPS) is dispatched from `SMTPS_PORTS`; `useTLS` is `true`. The TLS handshake
+  completes first (`secureConnect` event), then the scanner waits for the `220` greeting as normal.
+- When `useTLS` is `true` and `host` is a hostname (not a bare IP), `servername` is set for SNI
+  so the TLS handshake targets the correct virtual host. Bare IPs omit `servername`.
 - The `greeted` flag prevents sending `EHLO` more than once if the server sends the `220` greeting
   in multiple TCP segments.
 - The socket is destroyed as soon as a `250 ` or `250-` line is received — the first of those
@@ -291,8 +298,11 @@ the EHLO exchange is the minimum correct interaction that elicits service inform
 
 **Example:**
 ```js
-const data = await probeSMTP("10.0.0.1", 25);
+const data = await probeSMTP("10.0.0.1", 25, false);
 // => "220 mail.example.com ESMTP\r\n250-mail.example.com\r\n250 STARTTLS\r\n"
+
+const data = await probeSMTP("10.0.0.1", 465, true);
+// => "220 mail.example.com ESMTP\r\n250-mail.example.com\r\n250 AUTH LOGIN\r\n"
 ```
 
 ---
@@ -383,7 +393,10 @@ object. Only headers that reveal server software or CMS identity are captured; t
 - Captured headers: `server`, `x-powered-by`, `content-type`, `location`, `x-generator`,
   `x-drupal-cache`, `x-wordpress-cache`.
 - The status line (first line) is skipped by slicing off index 0 after splitting on `\r?\n`.
-- Parsing stops at the first blank line (`sep === -1`) so the response body is never scanned.
+- A blank line (`line.trim() === ""`) signals the end of headers and stops the loop with `break`,
+  so the response body is never scanned.
+- A line with no `:` separator is malformed; the loop uses `continue` to skip it rather than
+  stopping, so a single bad header line does not discard all headers that follow it.
 - Returns `null` rather than an empty object so callers can use a simple truthiness check.
 
 **Example:**
@@ -436,8 +449,8 @@ if (result) {
 **Purpose:**
 Dispatches each port to the probe strategy appropriate for its service, then returns a uniform
 result object for accumulation by `scanHost`. The dispatch order is: passive banner read for ports
-in `PASSIVE_PORTS`, EHLO exchange for ports in `SMTP_PORTS`, then TLS-first HTTP banner grab for
-everything else.
+in `PASSIVE_PORTS`, plain EHLO exchange for ports in `SMTP_PORTS`, implicit-TLS EHLO exchange for
+ports in `SMTPS_PORTS`, then TLS-first HTTP banner grab for everything else.
 
 **Parameters:**
 - `host`     `{string}` — IP address or hostname
@@ -446,7 +459,8 @@ everything else.
   `tryTCPConnect` for use in TLS SNI and the HTTP `Host` header
 
 **Returns:** `{Promise<{proto: string, port: number, data: string|null, cert: object|null, headers: object|null}>}`
-- `proto`   — `"TCP"` for passive/SMTP probes, `"TLS"` if TLS succeeded, `"SMTP"` for SMTP ports
+- `proto`   — `"TCP"` for passive banner probes, `"SMTP"` for plain SMTP ports, `"SMTPS"` for
+  implicit-TLS SMTP, `"TLS"` if TLS succeeded, `"TCP"` for plain HTTP fallback
 - `port`    — echoed back for result aggregation
 - `data`    — response text, or `null` if the port is closed
 - `cert`    — parsed certificate fields from `extractCert`, or `null` for non-TLS ports
@@ -457,12 +471,17 @@ everything else.
   IMAP (143/993), MySQL (3306), Redis (6379), Telnet (23) go to `probeBannerOnly`. An HTTP probe
   against these services creates a protocol-mismatch error entry in the service log — a clear
   scanner fingerprint.
-- **`SMTP_PORTS` dispatch:** ports 25 and 587 go to `probeSMTP`, which performs the minimum
-  valid EHLO exchange to get capability data without triggering SMTP error logging.
+- **`SMTP_PORTS` dispatch:** ports 25 and 587 go to `probeSMTP(host, port, false)`, which performs
+  the minimum valid EHLO exchange over plain TCP to get capability data without triggering SMTP
+  error logging.
+- **`SMTPS_PORTS` dispatch:** port 465 goes to `probeSMTP(host, port, true)`, which performs the
+  same EHLO exchange but over an implicit TLS connection (SMTPS). The TLS handshake completes
+  before any SMTP data flows.
 - **TLS-first fallback:** all other ports attempt TLS first. If the handshake fails, plain TCP
   with an HTTP HEAD probe is tried. Both probes are never run simultaneously.
 - `proto` reflects which strategy was used, not merely what was tried last. A successful TLS probe
-  sets `proto: "TLS"`; a successful SMTP probe sets `proto: "SMTP"`.
+  sets `proto: "TLS"`; a successful SMTP probe sets `proto: "SMTP"`; a successful SMTPS probe sets
+  `proto: "SMTPS"`.
 - `headers` is only populated for HTTP/HTTPS responses. `cert` is only populated for successful
   TLS connections.
 
@@ -473,6 +492,9 @@ const result = await scanTCPPort("192.168.1.1", 443);
 
 const result = await scanTCPPort("192.168.1.1", 22);
 // => { proto: "TCP", port: 22, data: "SSH-2.0-OpenSSH_9.3p1 Ubuntu-3", cert: null, headers: null }
+
+const result = await scanTCPPort("192.168.1.1", 465);
+// => { proto: "SMTPS", port: 465, data: "220 mail.example.com ESMTP\r\n250 AUTH LOGIN\r\n", cert: null, headers: null }
 ```
 
 ---

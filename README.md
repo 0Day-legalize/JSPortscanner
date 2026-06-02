@@ -15,7 +15,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | Parallel scanning | 50 hosts in parallel, 50 TCP + 20 UDP workers per host |
 | Half-open SYN scan | `--syn` flag sends real-source-IP SYNs without completing the TCP handshake — SSH, NGINX, Apache, and Cowrie never log the probe |
 | Slow mode | `--slow` flag drops to 5 concurrent hosts, 10 TCP connections, and 5–60s jitter |
-| Service-appropriate probes | Passive banner read for SSH/FTP/POP3/IMAP/MySQL/Redis/Telnet; proper EHLO exchange for SMTP |
+| Service-appropriate probes | Passive banner read for SSH/FTP/POP3/IMAP/MySQL/Redis/Telnet; plain EHLO exchange for SMTP (25/587); implicit-TLS EHLO for SMTPS (465) |
 | Port shuffle | Fisher-Yates randomised scan order per host |
 | Jitter | Random 10–250ms delay before each probe (5–60s in slow mode) |
 | Random source port | Breaks sequential local port fingerprint in decoy packets |

@@ -195,20 +195,22 @@ scanned range.
 
 ---
 
-## 5. Service-appropriate probe dispatch (`PASSIVE_PORTS` and `SMTP_PORTS`)
+## 5. Service-appropriate probe dispatch (`PASSIVE_PORTS`, `SMTP_PORTS`, and `SMTPS_PORTS`)
 
-**Implementation:** Two `Set` constants — `PASSIVE_PORTS` and `SMTP_PORTS` — checked at the top of
-`scanTCPPort` before any TLS or HTTP probe is attempted.
+**Implementation:** Three `Set` constants — `PASSIVE_PORTS`, `SMTP_PORTS`, and `SMTPS_PORTS` —
+checked at the top of `scanTCPPort` before any TLS or HTTP probe is attempted.
 
 **What it does:**
-Instead of a single TLS skip-list, `scanTCPPort` now dispatches each port to the most appropriate
-probe strategy:
+`scanTCPPort` dispatches each port to the most appropriate probe strategy in priority order:
 
 - **`PASSIVE_PORTS`** (SSH 22/2222, FTP 21, DNS 53, POP3 110/995, IMAP 143/993, MySQL 3306,
   PostgreSQL 5432, Redis 6379, MongoDB 27017, Telnet 23): `probeBannerOnly` — opens a TCP
   connection and reads whatever the service sends on connect, without writing anything.
-- **`SMTP_PORTS`** (25, 587): `probeSMTP` — waits for the `220` greeting then sends `EHLO mail.example.com`
-  to elicit the capability list.
+- **`SMTP_PORTS`** (25, 587): `probeSMTP(host, port, false)` — waits for the `220` greeting then
+  sends `EHLO mail.example.com` over a plain TCP connection to elicit the capability list.
+- **`SMTPS_PORTS`** (465): `probeSMTP(host, port, true)` — same EHLO exchange, but the connection
+  is wrapped in implicit TLS first. The TLS handshake (`secureConnect`) completes before any SMTP
+  data flows, matching the SMTPS protocol design.
 - **All other ports**: TLS-first strategy unchanged (`tryTLSConnect` → `tryTCPConnect` fallback).
 
 **Why it helps:**
@@ -221,21 +223,23 @@ connect. By dispatching each port to a matching probe:
 2. No failed TLS handshake packets hit the wire for plaintext services.
 3. SMTP capability data (supported extensions, STARTTLS availability) is captured rather than a
    raw banner fragment.
+4. SMTPS (port 465) receives the correct implicit-TLS connect rather than a plain TCP connection
+   that would stall waiting for a `220` greeting that never arrives.
 
 | Scenario | What service logs show |
 |---|---|
 | HTTP probe to SSH | `"Bad packet length"` / `"Protocol mismatch"` in sshd log — visible scanner fingerprint |
 | TLS probe to MySQL | `"SSL connection error: protocol version"` in MySQL error log |
 | Passive read to SSH | Clean connect + banner read — normal client behaviour |
-| EHLO to SMTP | Normal SMTP handshake — indistinguishable from a mail server greeting |
+| EHLO to SMTP (plain) | Normal SMTP handshake — indistinguishable from a mail server greeting |
+| Implicit-TLS EHLO to SMTPS | Correct SMTPS connect — no protocol error in mail logs |
 
 **Gotchas:**
-- Both sets are static. A service running SSH on a non-standard port that is not in `PASSIVE_PORTS`
-  will still receive an HTTP probe. Adding the port to `passiveBannerPorts` in `settings.json`
-  is the correct fix.
-- `plaintextPorts` in `settings.json` is still present for other callers but is no longer used
-  by `scanTCPPort` for dispatch decisions — `PASSIVE_PORTS` and `SMTP_PORTS` have superseded it
-  for that purpose.
+- All three sets are static. A service running SSH on a non-standard port that is not in
+  `PASSIVE_PORTS` will still receive an HTTP probe. Adding the port to `passiveBannerPorts` in
+  `settings.json` is the correct fix.
+- `SMTPS_PORTS` is checked after `SMTP_PORTS`, so a port cannot belong to both sets. Port 465
+  must appear only in `smtpsTLSPorts`, not in `smtpPorts`.
 
 ---
 
