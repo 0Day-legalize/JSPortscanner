@@ -30,11 +30,26 @@ const REFERERS   = cfg.referers;
 const LANGUAGES  = cfg.acceptLanguages;
 const COOKIES    = cfg.fakeCookies;
 
+const REUSE_REQUESTS  = cfg.connectionReuseRequests;
+const FRAGMENT_DECOYS = cfg.fragmentDecoys;
+
 const randomUA       = () => UA_LIST[rand(UA_LIST.length)];
 const randomPath     = () => HTTP_PATHS[rand(HTTP_PATHS.length)];
 const randomReferer  = () => REFERERS[rand(REFERERS.length)];
 const randomLanguage = () => LANGUAGES[rand(LANGUAGES.length)];
 const randomCookie   = () => COOKIES[rand(COOKIES.length)];
+
+// builds one HTTP HEAD request string — pipelined requests simulate real browser session
+const buildRequest = (hostname, keepAlive) =>
+    `HEAD ${randomPath()} HTTP/1.1\r\n` +
+    `Host: ${hostname}\r\n` +
+    `User-Agent: ${randomUA()}\r\n` +
+    `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
+    `Accept-Language: ${randomLanguage()}\r\n` +
+    `Accept-Encoding: gzip, deflate\r\n` +
+    `Referer: ${randomReferer()}\r\n` +
+    `Cookie: ${randomCookie()}\r\n` +
+    `Connection: ${keepAlive ? "keep-alive" : "close"}\r\n\r\n`;
 
 // --- ʕ•ᴥ•ʔ obfuscation helpers ʕ•ᴥ•ʔ ---
 
@@ -126,12 +141,61 @@ function getDecoySocket() {
     } catch { return null; }
 }
 
+/**
+ * Splits a complete SYN packet into two IP fragments.
+ * Fragment 1 carries the first 8 bytes of TCP (src+dst port+seq), fragment 2 the rest.
+ * Some IDS systems inspect fragments individually and miss the SYN because they
+ * can't reassemble fast enough — the target OS reassembles normally.
+ *
+ * @param {Buffer} full - Complete 40-byte packet from buildSynPacket
+ * @returns {[Buffer, Buffer]} Two IP fragment buffers
+ */
+function fragmentPacket(full) {
+    const id  = rand(0xffff);
+    const ttl = full[8];
+    const src = full.slice(12, 16);
+    const dst = full.slice(16, 20);
+
+    // fragment 1: IP header + first 8 bytes of TCP (MF flag set, offset=0)
+    const f1 = Buffer.alloc(28);
+    f1[0] = 0x45; f1[1] = 0x00;
+    f1.writeUInt16BE(28, 2);
+    f1.writeUInt16BE(id, 4);
+    f1.writeUInt16BE(0x2000, 6);        // MF=1, offset=0
+    f1[8] = ttl; f1[9] = 6;
+    f1.writeUInt16BE(0, 10);
+    src.copy(f1, 12); dst.copy(f1, 16);
+    full.copy(f1, 20, 20, 28);          // first 8 TCP bytes
+    f1.writeUInt16BE(checksum(f1.slice(0, 20)), 10);
+
+    // fragment 2: IP header + last 12 bytes of TCP (MF=0, offset=1 meaning 8 bytes)
+    const f2 = Buffer.alloc(32);
+    f2[0] = 0x45; f2[1] = 0x00;
+    f2.writeUInt16BE(32, 2);
+    f2.writeUInt16BE(id, 4);
+    f2.writeUInt16BE(0x0001, 6);        // MF=0, offset=1 (=8 bytes)
+    f2[8] = ttl; f2[9] = 6;
+    f2.writeUInt16BE(0, 10);
+    src.copy(f2, 12); dst.copy(f2, 16);
+    full.copy(f2, 20, 28, 40);          // last 12 TCP bytes
+    f2.writeUInt16BE(checksum(f2.slice(0, 20)), 10);
+
+    return [f1, f2];
+}
+
 function sendDecoys(dstIP, dstPort) {
     const sock = getDecoySocket();
     if (!sock) return;
     for (let i = 0; i < DECOYS; i++) {
         const pkt = buildSynPacket(randomPrivateIP(), dstIP, randomSourcePort(), dstPort);
-        sock.send(pkt, 0, pkt.length, dstIP, () => {});
+        if (FRAGMENT_DECOYS && rand(2) === 0) {
+            // alternate between normal and fragmented decoys to mix traffic patterns
+            const [f1, f2] = fragmentPacket(pkt);
+            sock.send(f1, 0, f1.length, dstIP, () => {});
+            sock.send(f2, 0, f2.length, dstIP, () => {});
+        } else {
+            sock.send(pkt, 0, pkt.length, dstIP, () => {});
+        }
     }
 }
 
@@ -152,18 +216,10 @@ function tryTCPConnect(host, port, useTLS, hostname) {
 
         socket.on(useTLS ? "secureConnect" : "connect", () => {
             connected = true;
-            // banner grab — random UA + path per connection to avoid scanner fingerprinting
-            socket.write(
-                `HEAD ${randomPath()} HTTP/1.1\r\n` +
-                `Host: ${hostname}\r\n` +
-                `User-Agent: ${randomUA()}\r\n` +
-                `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
-                `Accept-Language: ${randomLanguage()}\r\n` +
-                `Accept-Encoding: gzip, deflate\r\n` +
-                `Referer: ${randomReferer()}\r\n` +
-                `Cookie: ${randomCookie()}\r\n` +
-                `Connection: close\r\n\r\n`
-            );
+            let payload = "";
+            for (let i = 0; i < REUSE_REQUESTS; i++)
+                payload += buildRequest(hostname, i < REUSE_REQUESTS - 1);
+            socket.write(payload);
         });
 
         socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });
@@ -236,17 +292,11 @@ function tryTLSConnect(host, port, hostname) {
 
         socket.on("secureConnect", () => {
             cert = extractCert(socket);
-            socket.write(
-                `HEAD ${randomPath()} HTTP/1.1\r\n` +
-                `Host: ${hostname}\r\n` +
-                `User-Agent: ${randomUA()}\r\n` +
-                `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
-                `Accept-Language: ${randomLanguage()}\r\n` +
-                `Accept-Encoding: gzip, deflate\r\n` +
-                `Referer: ${randomReferer()}\r\n` +
-                `Cookie: ${randomCookie()}\r\n` +
-                `Connection: close\r\n\r\n`
-            );
+            // pipeline REUSE_REQUESTS requests — earlier ones keep-alive, last one close
+            let payload = "";
+            for (let i = 0; i < REUSE_REQUESTS; i++)
+                payload += buildRequest(hostname, i < REUSE_REQUESTS - 1);
+            socket.write(payload);
         });
 
         socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });

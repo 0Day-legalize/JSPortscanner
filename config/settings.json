@@ -36,7 +36,9 @@
       "_gid=GA1.2.987654321.1700000000; visited=1",
       "lang=en; tz=Europe%2FBerlin",
       "consent=1; _fbp=fb.1.1700000000.123456789"
-    ]
+    ],
+    "connectionReuseRequests": 2,
+    "fragmentDecoys": true
   },
   "honeypot": {
     "suspiciousPortThreshold": 6,
