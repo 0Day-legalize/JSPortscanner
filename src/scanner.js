@@ -23,7 +23,6 @@ const TIMEOUT   = cfg.socketTimeoutMs;
 const J_MIN     = cfg.jitterMinMs;
 const J_MAX     = cfg.jitterMaxMs;
 const DECOYS    = cfg.decoyCount;
-const PLAIN     = new Set(cfg.plaintextPorts);
 const UA_LIST   = cfg.userAgents;
 const HTTP_PATHS = cfg.httpPaths;
 const REFERERS   = cfg.referers;

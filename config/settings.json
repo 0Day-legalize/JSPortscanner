@@ -43,7 +43,7 @@
     "slowJitterMaxMs": 60000,
     "slowMaxHostWorkers": 5,
     "slowMaxTCPConnections": 10,
-    "passiveBannerPorts": [22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23],
+    "passiveBannerPorts": [22, 2222, 21, 53, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23],
     "smtpPorts": [25, 587]
   },
   "honeypot": {
