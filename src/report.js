@@ -278,8 +278,9 @@ function filterCards() {
 // --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
 const args     = process.argv.slice(2);
-const scanFile = args.find(a => !a.startsWith("--") && !a.endsWith(".html"));
-const outFile  = args.find(a => a.endsWith(".html"));
+const positional = args.filter(a => !a.startsWith("--"));
+const scanFile = positional[0] || null;
+const outFile  = positional[1] || null;
 const minPorts = (() => { const f = args.find(a => a.startsWith("--min-ports=")); return f ? Number(f.split("=")[1]) : 0; })();
 
 if (args.includes("--help") || args.includes("-h") || !scanFile) {

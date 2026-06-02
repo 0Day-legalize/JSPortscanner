@@ -62,7 +62,8 @@ const buildRequest = (hostname, keepAlive) =>
 
 // --- ʕ•ᴥ•ʔ obfuscation helpers ʕ•ᴥ•ʔ ---
 
-const rand = (n) => Math.floor(Math.random() * n);
+const rand    = (n) => Math.floor(Math.random() * n);
+const isIPv4  = (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
 
 function randomSourcePort() {
     return rand(65535 - 1024 + 1) + 1024;
@@ -78,13 +79,6 @@ function shufflePorts(first, last) {
 }
 
 // --- ʕ•ᴥ•ʔ obfuscation decoy IPs ʕ•ᴥ•ʔ ---
-
-function randomPrivateIP() {
-    const pick = rand(3);
-    if (pick === 0) return `10.${rand(256)}.${rand(256)}.${1 + rand(253)}`;
-    if (pick === 1) return `172.${16 + rand(16)}.${rand(256)}.${1 + rand(253)}`;
-    return `192.168.${rand(256)}.${1 + rand(253)}`;
-}
 
 // one's complement checksum per RFC 791
 function checksum(buf) {
@@ -220,8 +214,12 @@ let decoyPool = [];
  * @returns {string}
  */
 function randomDecoyIP(dstIP) {
-    const candidates = decoyPool.filter(ip => ip !== dstIP);
-    if (candidates.length > 0) return candidates[rand(candidates.length)];
+    if (decoyPool.length > 1) {
+        // pick random from pool, retry if we land on the real target
+        let ip;
+        do { ip = decoyPool[rand(decoyPool.length)]; } while (ip === dstIP);
+        return ip;
+    }
 
     // fallback: random host in the same /24
     const parts  = dstIP.split(".").map(Number);
@@ -383,13 +381,9 @@ function probeSMTP(host, port) {
 
 // --- ʕ•ᴥ•ʔ port scanning + banner grabbing ʕ•ᴥ•ʔ ---
 
-function tryTCPConnect(host, port, useTLS, hostname) {
+function tryTCPConnect(host, port, hostname) {
     return new Promise((resolve) => {
-        // servername must be a hostname, not an IP — skip it if no PTR record was found
-        const isIP = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
-        const socket = useTLS
-            ? tls.connect({ host, port, rejectUnauthorized: false, ...(isIP ? {} : { servername: hostname }) })
-            : net.createConnection({ host, port });
+        const socket = net.createConnection({ host, port });
 
         let data = "";
         let connected = false;
@@ -460,11 +454,10 @@ function parseHeaders(raw) {
 
 function tryTLSConnect(host, port, hostname) {
     return new Promise((resolve) => {
-        const isIP   = /^\d+\.\d+\.\d+\.\d+$/.test(hostname);
         const socket = tls.connect({
             host, port,
             rejectUnauthorized: false,
-            ...(isIP ? {} : { servername: hostname }),
+            ...(isIPv4(hostname) ? {} : { servername: hostname }),
         });
 
         let data = "";
@@ -507,7 +500,7 @@ async function scanTCPPort(host, port, hostname = host) {
         return { proto: "TLS", port, data: tlsRes.data, cert: tlsRes.cert, headers };
     }
 
-    const tcpRes = await tryTCPConnect(host, port, false, hostname);
+    const tcpRes = await tryTCPConnect(host, port, hostname);
     const headers = tcpRes ? parseHeaders(tcpRes) : null;
     return { proto: "TCP", port, data: tcpRes, cert: null, headers };
 }
@@ -569,7 +562,7 @@ async function scanHost(host, firstPort, lastPort, onProgress, srcIP = null) {
 
     let resolvedIP = null;
     try {
-        resolvedIP = /^\d+\.\d+\.\d+\.\d+$/.test(host)
+        resolvedIP = isIPv4(host)
             ? host
             : (await dns.lookup(host)).address;
     } catch {}

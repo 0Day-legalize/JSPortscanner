@@ -63,8 +63,9 @@ function parseBanners(portInfo) {
  */
 function queryCVEs(cpe, version) {
     return new Promise((resolve) => {
-        const keyword = encodeURIComponent(`${cpe.split(":")[1]} ${version}`);
-        const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${keyword}&resultsPerPage=5`;
+        // CPE-based search is precise — matches only CVEs for this exact product+version
+        const cpeName = encodeURIComponent(`cpe:2.3:a:${cpe}:${version}`);
+        const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=${cpeName}&resultsPerPage=5`;
 
         https.get(url, { headers: { "User-Agent": "RCN-Scanner/1.0" } }, (res) => {
             let data = "";
