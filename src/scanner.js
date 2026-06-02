@@ -390,7 +390,7 @@ function tryTCPConnect(host, port, hostname) {
 
         socket.setTimeout(TIMEOUT);
 
-        socket.on(useTLS ? "secureConnect" : "connect", () => {
+        socket.on("connect", () => {
             connected = true;
             let payload = "";
             for (let i = 0; i < REUSE_REQUESTS; i++)
