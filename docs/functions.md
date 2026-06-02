@@ -5,32 +5,6 @@ Within each group they appear in file order.
 
 ---
 
-## jitter()
-
-**Purpose:**
-Pauses execution for a random number of milliseconds in the range `[JITTER_MIN_MS, JITTER_MAX_MS]`.
-It exists because a scanner that probes at perfectly uniform intervals has a detectable timing
-signature. Inserting a random pause between each probe makes automated detection significantly harder.
-
-**Parameters:** none
-
-**Returns:** `{Promise<void>}`
-
-**Notes:**
-- The delay is drawn from a uniform distribution, not Gaussian. This is intentional — a Gaussian
-  distribution clusters around the mean and can still be statistically fingerprinted with enough
-  samples.
-- The range is controlled by `JITTER_MIN_MS` (10 ms) and `JITTER_MAX_MS` (250 ms). Widening the
-  range increases stealth at the cost of scan speed.
-
-**Example:**
-```js
-await jitter(); // waits somewhere between 10 ms and 250 ms
-await scanTCPPort(host, port);
-```
-
----
-
 ## randomDecoyIP(dstIP)
 
 **Purpose:**
@@ -62,7 +36,7 @@ const fakeSource = randomDecoyIP("37.27.7.154");
 
 ---
 
-## oneComplementChecksum(buf)
+## checksum(buf)
 
 **Purpose:**
 Computes the 16-bit one's complement checksum mandated by RFC 791 (IP) and RFC 793 (TCP).
@@ -87,8 +61,8 @@ since `IP_HDRINCL` is set the scanner owns the full header and must supply corre
 ```js
 const header = Buffer.alloc(20);
 // ... fill IP header fields ...
-const checksum = oneComplementChecksum(header);
-header.writeUInt16BE(checksum, 10); // write back into header checksum field
+const cksum = checksum(header);
+header.writeUInt16BE(cksum, 10); // write back into header checksum field
 ```
 
 ---
@@ -194,15 +168,20 @@ many IDS systems use as a scanner fingerprint is eliminated.
 **Returns:** `{number}` — integer in range `[1024, 65535]`
 
 **Notes:**
-- Port 0 through 1023 are reserved (well-known ports). Binding to them requires root and would be
-  confusing to a service on the target, so the range starts at 1024.
-- The OS may still refuse a specific port if it is already in use. `net.createConnection` and
-  `tls.connect` will throw in that case, but the probability of collision is negligible given the
-  64,512-port range and typical ephemeral hold durations.
+- Port 0 through 1023 are reserved (well-known ports). Using them as a source port would be
+  confusing, so the range starts at 1024.
+- `randomSourcePort()` is only used to populate the TCP source port field inside `buildSynPacket()`
+  for decoy packets and inside `probeSYNHalfOpen()` for SYN probe packets. Real TCP/TLS connections
+  opened via `net.createConnection` and `tls.connect` use OS-assigned ephemeral ports.
+- In `probeSYNHalfOpen()`, a collision-avoidance loop retries until a port not already tracked in
+  `pendingSYNs` is found, preventing a new probe from overwriting the resolve handler of an
+  in-flight one.
 
 **Example:**
 ```js
-const socket = net.createConnection({ host, port, localPort: randomSourcePort() });
+// inside buildSynPacket — writes the chosen port into the TCP header
+const srcPort = randomSourcePort();
+pkt.writeUInt16BE(srcPort, 20);
 ```
 
 ---
@@ -518,7 +497,7 @@ silently dropping the packet.
 - `"ERROR: <message>"` for other unexpected socket errors
 
 **Notes:**
-- The `finish()` guard (`isFinished` flag) is essential because the `message` event and the timer
+- The `finish()` guard (`done` flag) is essential because the `message` event and the timer
   callback can both fire in the same event loop tick under some OS conditions, and `socket.close()`
   must only be called once.
 - An empty payload (`Buffer.alloc(0)`) is used because we have no knowledge of what protocol the

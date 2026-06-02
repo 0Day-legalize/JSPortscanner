@@ -883,7 +883,9 @@ strings known to appear in honeypot configurations.
 
 **What it controls:**
 FTP banner strings that are known honeypot defaults. A substring match (not exact match) is used
-so partial captures from the scanner still trigger the check.
+so partial captures from the scanner still trigger the check. In `checkHost`, the banner is
+extracted from either the object format (`value.banner`) or the legacy string format before the
+match is applied — the check is not tied to the raw `"TCP: 220"` prefix.
 
 **Effect of adding an entry:**
 New honeypot FTP banners are detected. Sources: Cowrie FTP component changelogs, T-Pot release

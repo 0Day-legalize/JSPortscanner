@@ -122,7 +122,33 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 4 — CVE LOOKUP  (src/vulnscan.js)                 │
+│  PHASE 4 — HONEYPOT DETECTION  (src/honeypot.js)         │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   For each host entry:  │
+│                         │
+│   checkHost()           │  static checks: Cowrie banners, bare SSH suffix,
+│                         │  FTP honeypot banners, Telnet open, T-Pot port
+│                         │  combo, suspiciously many open ports
+│                         │
+│   probeSSHFingerprint() │  live TCP connect to each SSH port; reads
+│                         │  MSG_KEXINIT algorithm lists
+│   checkSSHFingerprint() │  checks kex/MAC/cipher/host-key lists against
+│                         │  known Cowrie tells from settings.json
+│                         │
+│   entry.honeypot =      │  { suspected: bool, reasons: [] }
+│     { suspected, reasons}│  written back into each host entry
+└──────────┬──────────────┘
+           │  scan JSON updated in place
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 5 — CVE LOOKUP  (src/vulnscan.js)                 │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -150,11 +176,11 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 5 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 6 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
-  scan.json  wordlist.txt  [--hosts=ip1,ip2,...]
+  scan.json  wordlist.txt  [--hosts=ip1,ip2,...]  [--no-http]
        │
        ▼
 ┌─────────────────────────┐
@@ -197,7 +223,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 6 — HTML REPORT  (src/report.js)                  │
+│  PHASE 7 — HTML REPORT  (src/report.js)                  │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -249,7 +275,7 @@ CLI arguments
 | `parseHeaders` on every HTTP response | Server, X-Powered-By, and CMS headers fingerprint the stack without additional probes |
 | `hostname` field on host results | PTR record stored so downstream tools know the resolved name without re-querying DNS |
 | WHOIS enrichment is a separate process | Owner lookup is slow and sequential; keeping it out of the scanner avoids blocking port probes |
-| PLAINTEXT_PORTS skip-list | Avoids wasted TLS handshake attempts on protocols that never negotiate TLS |
+| `PASSIVE_PORTS` skip-list | Avoids wasted TLS handshake attempts on protocols that never negotiate TLS |
 | Incremental JSON flush (scanner) | Partial results are preserved if the process is interrupted |
 | Incremental JSON flush (credtest) | Cracked credentials are saved host-by-host; a crash loses at most one host |
 | Credential testing is a separate process | Decouples scan speed from login attempt rate; each phase can be tuned independently |
