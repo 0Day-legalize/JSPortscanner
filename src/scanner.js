@@ -647,7 +647,7 @@ async function scanHost(host, firstPort, lastPort, onProgress, srcIP = null) {
         ports[port] = { proto, ...entry };
     }
 
-    return { host, hostname: hostname !== host ? hostname : undefined, ports, scannedAt: new Date().toISOString() };
+    return { host, hostname: hostname === host ? undefined : hostname, ports, scannedAt: new Date().toISOString() };
 }
 
 // --- ʕ•ᴥ•ʔ target parsing ʕ•ᴥ•ʔ ---
