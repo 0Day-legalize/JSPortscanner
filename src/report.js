@@ -277,23 +277,35 @@ function filterCards() {
 
 // --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
-const [scanFile, outFile] = process.argv.slice(2);
+const args     = process.argv.slice(2);
+const scanFile = args.find(a => !a.startsWith("--") && !a.endsWith(".html"));
+const outFile  = args.find(a => a.endsWith(".html"));
+const minPorts = (() => { const f = args.find(a => a.startsWith("--min-ports=")); return f ? Number(f.split("=")[1]) : 0; })();
 
-if (process.argv.includes("--help") || process.argv.includes("-h") || !scanFile) {
+if (args.includes("--help") || args.includes("-h") || !scanFile) {
     console.log(`
   RCN Report Generator
 
   usage:
-    node src/report.js <scan.json> [output.html]
+    node src/report.js <scan.json> [output.html] [--min-ports=N]
 
-  example:
+  flags:
+    --min-ports=N     only include hosts with N or more open ports
+
+  examples:
     node src/report.js scans/results.json
     node src/report.js scans/results.json report.html
+    node src/report.js scans/results.json ~/report.html --min-ports=6
 `);
     process.exit(scanFile ? 0 : 1);
 }
 
-const data       = JSON.parse(fs.readFileSync(scanFile, "utf8"));
+let data = JSON.parse(fs.readFileSync(scanFile, "utf8"));
+if (minPorts > 0) {
+    const before = data.length;
+    data = data.filter(h => Object.keys(h.ports || {}).length >= minPorts);
+    console.log(`filtered: ${before} → ${data.length} hosts (>= ${minPorts} ports)`);
+}
 const outputPath = outFile || scanFile.replace(/\.json$/, ".html");
 const html       = buildHTML(scanFile, data);
 
