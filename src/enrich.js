@@ -49,6 +49,24 @@ function parseOwner(raw) {
 
 const [scanFile] = process.argv.slice(2);
 
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(`
+  RCN WHOIS Enricher
+
+  usage:
+    node src/enrich.js <scan.json> [--help]
+
+  what it does:
+    queries whois.ripe.net for each host IP and adds an owner field
+    to the scan JSON — useful for identifying Hetzner customers and
+    other hosting providers.
+
+  example:
+    node src/enrich.js scans/results.json
+`);
+    process.exit(0);
+}
+
 if (!scanFile) {
     console.error("usage: node src/enrich.js <scan.json>");
     process.exit(1);

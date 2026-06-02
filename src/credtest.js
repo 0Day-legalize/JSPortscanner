@@ -263,6 +263,29 @@ const wordlistFile = args[1];
 const hostsArg    = args.find(a => a.startsWith("--hosts="));
 const targetHosts = hostsArg ? new Set(hostsArg.replace("--hosts=", "").split(",")) : null;
 
+if (args.includes("--help") || args.includes("-h")) {
+    console.log(`
+  RCN Credential Tester
+
+  usage:
+    node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--help]
+
+  arguments:
+    scan.json         scan result file produced by scanner.js
+    wordlist.txt      credential pairs, one per line in username:password format
+
+  flags:
+    --hosts=ip1,ip2   only test specific IPs from the scan file (comma-separated)
+    --help / -h       show this help
+
+  examples:
+    node src/credtest.js scans/results.json config/wordlist.txt
+    node src/credtest.js scans/results.json config/wordlist.txt --hosts=37.27.7.154
+    node src/credtest.js scans/results.json config/wordlist.txt --hosts=37.27.7.154,37.27.7.160
+`);
+    process.exit(0);
+}
+
 if (!scanFile || !wordlistFile) {
     console.error("Usage: node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]");
     console.error("Example: node src/credtest.js scans/results.json config/wordlist.txt --hosts=1.2.3.4,1.2.3.5");

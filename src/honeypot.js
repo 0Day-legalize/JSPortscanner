@@ -179,6 +179,28 @@ function checkHost(ports) {
 
 const [scanFile] = process.argv.slice(2);
 
+if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(`
+  RCN Honeypot Detector
+
+  usage:
+    node src/honeypot.js <scan.json> [--help]
+
+  what it checks:
+    - known Cowrie SSH banners
+    - SSH banners missing OS suffix (bare version strings)
+    - live SSH KEX fingerprint (connects and reads algorithm lists)
+    - known honeypot FTP banners
+    - Telnet port 23 open
+    - T-Pot port combination
+    - suspiciously many open ports
+
+  example:
+    node src/honeypot.js scans/results.json
+`);
+    process.exit(0);
+}
+
 if (!scanFile) {
     console.error("usage: node src/honeypot.js <scan.json>");
     process.exit(1);

@@ -641,17 +641,45 @@ function parseTargetFile(filePath) {
 
 // --- ʕ•ᴥ•ʔ main ʕ•ᴥ•ʔ ---
 
-if (process.getuid() !== 0) {
-    console.error("must be run as root (sudo)");
-    process.exit(1);
-}
-
 const rawArgs    = process.argv.slice(2);
 const slowMode   = rawArgs.includes("--slow");
 const synMode    = rawArgs.includes("--syn");
 const cleanArgs  = rawArgs.filter(a => a !== "--slow" && a !== "--syn");
 
+if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+    console.log(`
+  RCN Port Scanner
+
+  usage:
+    sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [flags]
+
+  target:
+    IP address        37.27.7.154
+    CIDR range        37.27.7.128/26
+    targets file      config/targets.txt
+
+  flags:
+    --slow            jitter 5–60s per probe, 5 concurrent hosts — stays under IDS thresholds
+    --syn             half-open SYN scan — never completes TCP handshake, no application logs
+    --help / -h       show this help
+
+  flags can be combined:
+    sudo node src/scanner.js config/targets.txt 1 1025 --syn --slow
+
+  examples:
+    sudo node src/scanner.js 37.27.7.128/26 22 22
+    sudo node src/scanner.js config/targets.txt 1 1025 scans/out.json --slow
+    sudo node src/scanner.js 37.27.7.154 1 65535 --syn
+`);
+    process.exit(0);
+}
+
 const [targetFile, firstPortArg, lastPortArg, outputFile] = cleanArgs;
+
+if (process.getuid() !== 0) {
+    console.error("must be run as root (sudo)");
+    process.exit(1);
+}
 
 if (slowMode) console.log("slow mode enabled — jitter 5–60s, 5 concurrent hosts\n");
 
