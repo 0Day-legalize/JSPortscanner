@@ -799,15 +799,34 @@ let hits          = 0;
 let portsScanned  = 0;
 const totalPorts  = hosts.length * (lastPort - firstPort + 1) * (udpMode ? 2 : 1);
 const BAR         = 30;
+const scanStart   = Date.now();
+
+function formatETA(ms) {
+    if (ms <= 0) return "done";
+    const s = Math.ceil(ms / 1000);
+    if (s < 60)  return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m${s % 60 > 0 ? ` ${s % 60}s` : ""}`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
 
 function renderBar() {
-    const pct       = totalPorts > 0 ? portsScanned / totalPorts : 0;
-    const filled    = Math.floor(pct * BAR);
-    const raccoon   = "ʕ•ᴥ•ʔ";
-    const eaten     = "·".repeat(filled);
+    const pct      = totalPorts > 0 ? portsScanned / totalPorts : 0;
+    const filled   = Math.floor(pct * BAR);
+    const raccoon  = "ʕ•ᴥ•ʔ";
+    const eaten    = "·".repeat(filled);
     const remaining = "·".repeat(Math.max(0, BAR - filled));
-    const pctStr    = String(Math.floor(pct * 100)).padStart(3, " ");
-    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  * ${hits}`);
+    const pctStr   = String(Math.floor(pct * 100)).padStart(3, " ");
+
+    // calculate ETA based on current scan rate
+    let eta = "";
+    if (portsScanned > 10 && pct < 1) {
+        const elapsed   = Date.now() - scanStart;
+        const totalEst  = elapsed / pct;
+        const remaining = totalEst - elapsed;
+        eta = `  eta ${formatETA(remaining)}`;
+    }
+
+    process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  * ${hits}${eta}`);
 }
 
 function onPortProgress() {
