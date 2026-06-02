@@ -128,25 +128,7 @@ node src/enrich.js scans/scan_1748476800000.json
 
 ---
 
-### Step 4 — Detect honeypots in scan results
-
-```bash
-node src/honeypot.js <scan.json>
-```
-
-Reads the scan JSON produced by the scanner and flags suspected honeypots using static checks
-(known Cowrie SSH and FTP banners, T-Pot port combinations, open Telnet, bare SSH version strings
-with no OS suffix, suspiciously many open ports) and live SSH KEX fingerprinting (connects to each
-SSH port, reads `MSG_KEXINIT`, and checks algorithm lists against known Cowrie tells). Results are
-written back into the same JSON under a `honeypot` field.
-
-```bash
-node src/honeypot.js scans/scan_1748476800000.json
-```
-
----
-
-### Step 5 — Detect software versions in scan results (optional)
+### Step 4 — Detect software versions in scan results (optional)
 
 ```bash
 node src/versiondetect.js <scan.json>
@@ -168,7 +150,7 @@ node src/versiondetect.js scans/scan_1748476800000.json
 
 ---
 
-### Step 6 — Scan for CVEs in detected software versions (optional)
+### Step 5 — Scan for CVEs in detected software versions (optional)
 
 ```bash
 node src/vulnscan.js <scan.json>
@@ -191,7 +173,7 @@ node src/vulnscan.js scans/scan_1748476800000.json
 
 ---
 
-### Step 7 — Test credentials against scan results (optional)
+### Step 6 — Test credentials against scan results (optional)
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http]
@@ -217,6 +199,24 @@ node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,
 
 # Skip HTTP/HTTPS testing
 node src/credtest.js scans/results.json config/wordlist.txt --no-http
+```
+
+---
+
+### Step 7 — Detect honeypots in scan results
+
+```bash
+node src/honeypot.js <scan.json>
+```
+
+Reads the scan JSON produced by the scanner and flags suspected honeypots using static checks
+(known Cowrie SSH and FTP banners, T-Pot port combinations, open Telnet, bare SSH version strings
+with no OS suffix, suspiciously many open ports) and live SSH KEX fingerprinting (connects to each
+SSH port, reads `MSG_KEXINIT`, and checks algorithm lists against known Cowrie tells). Results are
+written back into the same JSON under a `honeypot` field.
+
+```bash
+node src/honeypot.js scans/scan_1748476800000.json
 ```
 
 ---

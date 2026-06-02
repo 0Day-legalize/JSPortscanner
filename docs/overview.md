@@ -122,33 +122,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 4 — HONEYPOT DETECTION  (src/honeypot.js)         │
-└──────────────────────────────────────────────────────────┘
-
-CLI arguments
-  scan.json
-       │
-       ▼
-┌─────────────────────────┐
-│   For each host entry:  │
-│                         │
-│   checkHost()           │  static checks: Cowrie banners, bare SSH suffix,
-│                         │  FTP honeypot banners, Telnet open, T-Pot port
-│                         │  combo, suspiciously many open ports
-│                         │
-│   probeSSHFingerprint() │  live TCP connect to each SSH port; reads
-│                         │  MSG_KEXINIT algorithm lists
-│   checkSSHFingerprint() │  checks kex/MAC/cipher/host-key lists against
-│                         │  known Cowrie tells from settings.json
-│                         │
-│   entry.honeypot =      │  { suspected: bool, reasons: [] }
-│     { suspected, reasons}│  written back into each host entry
-└──────────┬──────────────┘
-           │  scan JSON updated in place
-           ▼
-
-┌──────────────────────────────────────────────────────────┐
-│  PHASE 5 — VERSION DETECTION  (src/versiondetect.js)     │
+│  PHASE 4 — VERSION DETECTION  (src/versiondetect.js)     │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -175,7 +149,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 6 — CVE LOOKUP  (src/vulnscan.js)                 │
+│  PHASE 5 — CVE LOOKUP  (src/vulnscan.js)                 │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -203,7 +177,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 7 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 6 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -247,6 +221,32 @@ CLI arguments
 └──────────┬──────────────┘
            │
            │  (optional — run at any point after scanning)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 7 — HONEYPOT DETECTION  (src/honeypot.js)         │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   For each host entry:  │
+│                         │
+│   checkHost()           │  static checks: Cowrie banners, bare SSH suffix,
+│                         │  FTP honeypot banners, Telnet open, T-Pot port
+│                         │  combo, suspiciously many open ports
+│                         │
+│   probeSSHFingerprint() │  live TCP connect to each SSH port; reads
+│                         │  MSG_KEXINIT algorithm lists
+│   checkSSHFingerprint() │  checks kex/MAC/cipher/host-key lists against
+│                         │  known Cowrie tells from settings.json
+│                         │
+│   entry.honeypot =      │  { suspected: bool, reasons: [] }
+│     { suspected, reasons}│  written back into each host entry
+└──────────┬──────────────┘
+           │  scan JSON updated in place
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
