@@ -36,10 +36,11 @@ function badge(text, color) {
  */
 function portRow(port, info) {
     const proto  = info.proto  || "";
-    const banner = info.banner || "";
-    const cert   = info.cert   || null;
-    const hdrs   = info.headers || null;
-    const cves   = info.cves   || null;
+    const banner  = info.banner  || "";
+    const cert    = info.cert    || null;
+    const hdrs    = info.headers || null;
+    const cves    = info.cves    || null;
+    const ver     = info.version || null;
 
     const protoColor = proto === "TLS" ? "#4caf50" : proto === "SYN" ? "#ff9800" : proto === "SMTP" ? "#9c27b0" : "#2196f3";
 
@@ -80,7 +81,7 @@ function portRow(port, info) {
     return `
         <tr>
             <td>${esc(port)}</td>
-            <td>${badge(proto, protoColor)}</td>
+            <td>${badge(proto, protoColor)}${ver ? ` <span style="font-size:11px;color:#8b949e">${esc(ver.vendor)}${ver.version ? " " + esc(ver.version) : ""}</span>` : ""}</td>
             <td class="banner">${esc(banner)}</td>
             <td>${certHtml}${hdrsHtml}${cvesHtml}</td>
         </tr>`;
