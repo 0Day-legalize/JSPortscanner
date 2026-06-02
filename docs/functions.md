@@ -1343,4 +1343,149 @@ node src/enrich.js <scan.json>
 
 ---
 
+---
+
+---
+
+---
+
+# report.js — Function Reference
+
+All functions below are defined in `src/report.js`. They are listed in the order they appear in the file.
+
+---
+
+## esc(s)
+
+**Purpose:**
+HTML-escapes a value before it is spliced into an HTML document. Every piece of data from the scan
+JSON passes through this before being written into the report, preventing stored XSS if the scan
+contains attacker-controlled banners or hostnames.
+
+**Parameters:**
+- `s` `{*}` — value to escape; `null` and `undefined` are coerced to an empty string before escaping
+
+**Returns:** `{string}` — the input with `&`, `<`, `>`, and `"` replaced by their HTML entity equivalents
+
+---
+
+## badge(text, color)
+
+**Purpose:**
+Renders a small pill-shaped label used to display protocol names (TLS, SYN, SMTP, TCP) alongside
+each port in the port table.
+
+**Parameters:**
+- `text`  `{string}` — label text; passed through `esc()` before insertion
+- `color` `{string}` — any CSS colour value (hex, named, rgb) applied as the background
+
+**Returns:** `{string}` — HTML `<span class="badge">` element
+
+---
+
+## portRow(port, info)
+
+**Purpose:**
+Renders one `<tr>` for the port table inside a host card. Handles the optional TLS certificate
+block and HTTP headers block; absent fields are omitted rather than rendered as empty cells.
+
+**Parameters:**
+- `port` `{string}` — port number string (e.g. `"443"`)
+- `info` `{object}` — port entry from the scan JSON with the following optional fields:
+  - `proto`   `{string}` — protocol label (`"TLS"`, `"TCP"`, `"SYN"`, `"SMTP"`, `"UDP"`)
+  - `banner`  `{string}` — first line of the service response
+  - `cert`    `{object}` — TLS certificate object with `cn`, `org`, `issuer`, `sans`, `expires`
+  - `headers` `{object}` — HTTP fingerprinting headers key/value map
+
+**Returns:** `{string}` — HTML `<tr>` element
+
+**Notes:**
+- Protocol colours are hard-coded per protocol name: green for TLS, orange for SYN, purple for
+  SMTP, blue for everything else. This makes the most security-relevant protocols visually distinct
+  at a glance.
+- The SANs list is truncated to 5 entries with a `+N more` suffix to prevent cards from growing
+  unwieldy on wildcard or multi-SAN certificates.
+
+---
+
+## hostCard(entry)
+
+**Purpose:**
+Renders the full card for one host, combining the header (IP, hostname, owner, port count, scan
+time), optional honeypot reasons banner, port table, and credential results block.
+
+**Parameters:**
+- `entry` `{object}` — single host entry from the scan JSON array with the following fields:
+  - `host`        `{string}`          — IP address
+  - `hostname`    `{string}`          — (optional) PTR-resolved hostname
+  - `owner`       `{string}`          — (optional) WHOIS organisation name
+  - `ports`       `{object}`          — port map passed to `portRow()`
+  - `scannedAt`   `{string}`          — ISO 8601 timestamp
+  - `honeypot`    `{object}`          — (optional) `{ suspected: boolean, reasons: string[] }`
+  - `credentials` `{object|"none found"}` — (optional) credential map from credtest
+
+**Returns:** `{string}` — HTML `<div class="card">` element; gets class `honeypot` when suspected
+
+**Notes:**
+- Honeypot reason strings are joined with `<br>` and displayed in a full-width warning strip
+  immediately below the card header, using a red border and dark red background to draw attention.
+- The credential block is rendered only when `entry.credentials` exists and is not the literal
+  string `"none found"`. Each cracked port is shown as a monospace inline chip.
+- `entry.scannedAt` is truncated to 19 characters (`2026-05-28T12:00:00`) by slicing before the
+  milliseconds; the `T` is replaced with a space for human readability.
+
+---
+
+## buildHTML(scanFile, data)
+
+**Purpose:**
+Assembles the complete self-contained HTML document. Computes four summary statistics at the top,
+renders every host as a card, and embeds the `filterCards()` search function and all CSS inline.
+The resulting string can be written directly to a `.html` file with no further processing.
+
+**Parameters:**
+- `scanFile` `{string}`   — path to the source JSON file; used in the page title and header subtitle
+- `data`     `{object[]}` — parsed scan JSON array
+
+**Returns:** `{string}` — complete `<!DOCTYPE html>` document
+
+**Notes:**
+- All CSS and JavaScript are embedded inline so the output is fully self-contained: opening it
+  without a server or network connection works correctly.
+- The `filterCards()` function, embedded in a `<script>` block, performs real-time DOM filtering
+  by matching the search input against each card's full `textContent`. This covers IPs, banners,
+  ports, hostnames, and owner names without indexing.
+- Summary stats are derived in a single pass over `data` using `reduce` and `filter` before any
+  HTML is generated — no additional passes over the data are needed.
+
+---
+
+## report.js — Entry Point
+
+**CLI syntax:**
+```
+node src/report.js <scan.json> [output.html]
+node src/report.js --help
+```
+
+**Argument parsing:**
+- `process.argv[2]` (`scanFile`) — path to the scan JSON to render
+- `process.argv[3]` (`outFile`)  — (optional) output path; defaults to `scanFile` with `.json` replaced by `.html`
+- `--help` / `-h`               — print usage and exit 0; exit 1 if `scanFile` is also absent
+
+**Behaviour:**
+1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
+2. Reads and parses the scan JSON synchronously.
+3. Determines the output path: the explicit `outFile` argument if provided, otherwise the input
+   path with the `.json` extension replaced by `.html`.
+4. Calls `buildHTML(scanFile, data)` and writes the result to the output path.
+5. Prints the absolute resolved output path to stdout.
+
+**Notes:**
+- The process exits with code `1` when called with no arguments so that shell pipelines and
+  scripts can detect a missing operand. `--help` with a valid `scanFile` exits with code `0`.
+- No root or special privileges are required — the script only reads and writes ordinary files.
+
+---
+
 *Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*

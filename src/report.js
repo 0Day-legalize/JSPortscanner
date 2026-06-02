@@ -3,16 +3,37 @@ import path from "node:path";
 
 // --- ʕ•ᴥ•ʔ helpers ʕ•ᴥ•ʔ ---
 
+/**
+ * HTML-escapes a value for safe inline insertion into HTML attributes and text content.
+ *
+ * @param {*} s - Value to escape; coerced to string; `null`/`undefined` treated as empty string
+ * @returns {string} HTML-safe string
+ */
 const esc = (s) => String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
+/**
+ * Renders a pill-shaped inline badge with the given background colour.
+ *
+ * @param {string} text  - Label text (HTML-escaped before insertion)
+ * @param {string} color - CSS colour value for the badge background
+ * @returns {string} HTML `<span>` element string
+ */
 function badge(text, color) {
     return `<span class="badge" style="background:${color}">${esc(text)}</span>`;
 }
 
+/**
+ * Renders one table row for an open port, including its protocol badge, banner, TLS certificate
+ * details, and HTTP response headers.
+ *
+ * @param {string} port - Port number string used as the row label
+ * @param {object} info - Port entry from the scan JSON (`proto`, `banner`, `cert`, `headers`)
+ * @returns {string} HTML `<tr>` element string
+ */
 function portRow(port, info) {
     const proto  = info.proto  || "";
     const banner = info.banner || "";
@@ -48,6 +69,13 @@ function portRow(port, info) {
         </tr>`;
 }
 
+/**
+ * Renders a full host card, including the header row, optional honeypot warning banner, port table,
+ * and credential results block.
+ *
+ * @param {object} entry - Single host entry from the scan JSON array
+ * @returns {string} HTML `<div class="card">` element string
+ */
 function hostCard(entry) {
     const isHoneypot   = entry.honeypot?.suspected === true;
     const honeypotNote = isHoneypot ? entry.honeypot.reasons?.join("<br>") : "";
@@ -89,6 +117,17 @@ function hostCard(entry) {
     </div>`;
 }
 
+// --- ʕ•ᴥ•ʔ html builder ʕ•ᴥ•ʔ ---
+
+/**
+ * Builds the complete self-contained HTML document for the scan report.
+ * Computes summary statistics, renders every host card, and embeds the
+ * search/filter script and all CSS inline so the file needs no external assets.
+ *
+ * @param {string}   scanFile - Original scan file path, shown in the report header
+ * @param {object[]} data     - Parsed scan JSON array (one entry per host)
+ * @returns {string} Full HTML document as a string
+ */
 function buildHTML(scanFile, data) {
     const total       = data.length;
     const totalPorts  = data.reduce((n, h) => n + Object.keys(h.ports || {}).length, 0);

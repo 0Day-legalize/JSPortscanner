@@ -123,7 +123,7 @@ node src/honeypot.js scans/scan_1748476800000.json
 
 ---
 
-### Step 4 — Test credentials against scan results
+### Step 4 — Test credentials against scan results (optional)
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
@@ -145,6 +145,40 @@ node src/credtest.js scans/results.json /path/to/passwords.txt
 # Test only specific hosts from the scan
 node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,192.168.1.5
 ```
+
+---
+
+### Step 5 — Generate an HTML report
+
+```bash
+node src/report.js <scan.json> [output.html]
+```
+
+Reads the scan JSON (after any combination of the earlier steps) and writes a self-contained,
+dark-themed HTML file. No server or external assets are required — open the file directly in a
+browser.
+
+| Flag / argument | Effect |
+|---|---|
+| `<scan.json>` | Path to the scan JSON produced by previous steps |
+| `[output.html]` | Optional output path; defaults to the same path as the input with `.html` extension |
+| `--help` / `-h` | Print usage and exit |
+
+```bash
+# Report saved alongside the scan file
+node src/report.js scans/scan_1748476800000.json
+
+# Report saved to a custom path
+node src/report.js scans/scan_1748476800000.json reports/results.html
+```
+
+The generated report includes:
+- Summary stats: hosts with open ports, total open ports, suspected honeypots, hosts with credentials
+- Live search/filter bar (IP, banner, port, owner)
+- Checkboxes to show only honeypots or only hosts with credentials
+- Each host displayed as a card; honeypot cards are highlighted with a red border and show detection reasons
+- Per-port table with protocol badge, banner, TLS certificate details (CN, Org, Issuer, SANs, expiry), and HTTP response headers
+- Credential results shown in green at the bottom of the relevant host card
 
 ---
 
@@ -245,8 +279,9 @@ PortScanner/
 ├── src/
 │   ├── scanner.js           Port scanner
 │   ├── enrich.js            WHOIS enrichment (adds owner field)
-│   ├── credtest.js          Credential tester
 │   ├── honeypot.js          Honeypot detector
+│   ├── credtest.js          Credential tester
+│   ├── report.js            HTML report generator
 │   └── utils.js             Shared helpers (jitter, runPool)
 ├── config/
 │   ├── settings.json        Tunable parameters for scanner, credtest, and honeypot

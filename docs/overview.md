@@ -135,6 +135,40 @@ CLI arguments
 │  written back into the  │  hostEntry.credentials = hits
 │  original scan JSON     │
 │  after each host        │  incremental flush — survives early exit
+└──────────┬──────────────┘
+           │
+           │  (optional — run at any point after scanning)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 4 — HTML REPORT  (src/report.js)                  │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json  [output.html]
+       │
+       ▼
+┌─────────────────────────┐
+│   buildHTML()           │
+│                         │
+│  Summary stats          │  hosts, ports, honeypots, creds counts
+│                         │
+│  For each host entry:   │
+│    hostCard()           │
+│      │                  │
+│      ├─ portRow()       │  per-port badge, banner, cert, headers
+│      └─ creds block     │  credential results in green
+│                         │
+│  Inline CSS + JS        │  search/filter; no external deps
+└──────────┬──────────────┘
+           │  self-contained .html file
+           ▼
+┌─────────────────────────┐
+│   Output                │
+│                         │
+│  Written to output.html │
+│  (defaults to input     │
+│   path with .html ext)  │
 └─────────────────────────┘
 ```
 
@@ -180,8 +214,9 @@ PortScanner/
 ├── src/
 │   ├── scanner.js          Port scanner — all scan logic lives here
 │   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
-│   ├── credtest.js         Credential tester — runs after scanner produces output
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
+│   ├── credtest.js         Credential tester — runs after scanner produces output
+│   ├── report.js           HTML report generator — produces a self-contained dark-themed report
 │   └── utils.js            Shared helpers — jitter() and runPool() used by scanner and credtest
 ├── config/
 │   ├── settings.json       Tunable parameters for scanner, credtest, and honeypot
