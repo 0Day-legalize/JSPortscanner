@@ -175,7 +175,7 @@ node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,
 ### Step 6 — Generate an HTML report
 
 ```bash
-node src/report.js <scan.json> [output.html]
+node src/report.js <scan.json> [output.html] [--min-ports=N]
 ```
 
 Reads the scan JSON (after any combination of the earlier steps) and writes a self-contained,
@@ -186,6 +186,7 @@ browser.
 |---|---|
 | `<scan.json>` | Path to the scan JSON produced by previous steps |
 | `[output.html]` | Optional output path; defaults to the same path as the input with `.html` extension |
+| `--min-ports=N` | Only include hosts with N or more open ports in the report |
 | `--help` / `-h` | Print usage and exit |
 
 ```bash
@@ -194,6 +195,9 @@ node src/report.js scans/scan_1748476800000.json
 
 # Report saved to a custom path
 node src/report.js scans/scan_1748476800000.json reports/results.html
+
+# Only include hosts with 6 or more open ports
+node src/report.js scans/scan_1748476800000.json reports/results.html --min-ports=6
 ```
 
 The generated report includes:

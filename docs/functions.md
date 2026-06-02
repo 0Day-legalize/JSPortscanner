@@ -1474,24 +1474,29 @@ The resulting string can be written directly to a `.html` file with no further p
 
 **CLI syntax:**
 ```
-node src/report.js <scan.json> [output.html]
+node src/report.js <scan.json> [output.html] [--min-ports=N]
 node src/report.js --help
 ```
 
 **Argument parsing:**
 - `process.argv[2]` (`scanFile`) — path to the scan JSON to render
 - `process.argv[3]` (`outFile`)  — (optional) output path; defaults to `scanFile` with `.json` replaced by `.html`
+- `--min-ports=N`               — (optional) integer threshold; hosts with fewer than N open ports are excluded from the report
 - `--help` / `-h`               — print usage and exit 0; exit 1 if `scanFile` is also absent
 
 **Behaviour:**
 1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
 2. Reads and parses the scan JSON synchronously.
-3. Determines the output path: the explicit `outFile` argument if provided, otherwise the input
+3. If `--min-ports=N` is supplied (N > 0), filters the parsed data to only hosts whose `ports`
+   map has at least N keys. Prints a `filtered: before → after hosts` line to stdout.
+4. Determines the output path: the explicit `outFile` argument if provided, otherwise the input
    path with the `.json` extension replaced by `.html`.
-4. Calls `buildHTML(scanFile, data)` and writes the result to the output path.
-5. Prints the absolute resolved output path to stdout.
+5. Calls `buildHTML(scanFile, data)` and writes the result to the output path.
+6. Prints the absolute resolved output path to stdout.
 
 **Notes:**
+- `--min-ports` is parsed from the raw `args` array with `args.find(a => a.startsWith("--min-ports="))`, so it can appear in any position after the script name.
+- Omitting `--min-ports` (or setting N to 0) includes all hosts; no filtering step is run.
 - The process exits with code `1` when called with no arguments so that shell pipelines and
   scripts can detect a missing operand. `--help` with a valid `scanFile` exits with code `0`.
 - No root or special privileges are required — the script only reads and writes ordinary files.
