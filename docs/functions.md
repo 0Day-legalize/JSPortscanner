@@ -1375,6 +1375,92 @@ node src/enrich.js <scan.json>
 
 ---
 
+# geolocate.js — Function Reference
+
+All functions below are defined in `src/geolocate.js`. They are listed in file order.
+
+---
+
+## batchGeoLookup(ips)
+
+**Purpose:**
+Sends a single HTTP POST request to the ip-api.com batch endpoint and returns geo data for up to
+100 IP addresses in one round-trip. Batching reduces the number of API requests for large scans and
+keeps usage within the free-tier rate limit.
+
+**Parameters:**
+- `ips` `{string[]}` — array of dotted-decimal IP address strings; maximum 100 per call
+
+**Returns:** `{Promise<object[]>}` — array of geo result objects in the same order as the input;
+entries are `null` for IPs that failed lookup or for which ip-api.com returned a non-`success`
+status. Each successful entry contains:
+- `status`      `{string}` — `"success"` or `"fail"`
+- `country`     `{string}` — full country name
+- `countryCode` `{string}` — ISO 3166-1 alpha-2 code
+- `city`        `{string}` — city name
+- `lat`         `{number}` — latitude
+- `lon`         `{number}` — longitude
+- `isp`         `{string}` — ISP name
+- `org`         `{string}` — organisation name
+- `as`          `{string}` — AS number and name (e.g. `"AS24940 Hetzner Online GmbH"`)
+
+**Notes:**
+- Uses plain HTTP (`http.request`), not HTTPS — the ip-api.com free tier does not support HTTPS.
+  Do not send sensitive data in the request body.
+- Both network errors and JSON parse failures resolve to an array of `null` values (one per
+  input IP) rather than rejecting, so a single failed batch does not abort the entire run.
+- The `fields` query parameter is set per-object in the POST body, requesting exactly the nine
+  fields written into `entry.geo`. Requesting only needed fields reduces response payload size.
+
+**Example:**
+```js
+const results = await batchGeoLookup(["1.1.1.1", "8.8.8.8"]);
+// => [
+//      { status: "success", country: "Australia", city: "...", lat: -33.8, lon: 151.2, isp: "Cloudflare", ... },
+//      { status: "success", country: "United States", city: "...", lat: 37.4, lon: -122.0, isp: "Google LLC", ... }
+//    ]
+```
+
+---
+
+## geolocate.js — Entry Point
+
+**CLI syntax:**
+```
+node src/geolocate.js <scan.json>
+node src/geolocate.js --help
+```
+
+**Argument parsing:**
+- `process.argv[2]` (`scanFile`) — path to the scan JSON produced by `scanner.js`
+- `--help` / `-h` — print usage and exit 0; exit 1 if `scanFile` is also absent
+
+**Behaviour:**
+1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
+2. Reads and parses the scan JSON synchronously; extracts the `host` field from every entry.
+3. Splits the host list into batches of `BATCH_SIZE` (100) and calls `batchGeoLookup()` for each.
+4. For each result with `status === "success"`, writes a `geo` object into the corresponding scan
+   entry with the nine fields listed under `batchGeoLookup`. Sets `entry.geo = null` on failure.
+5. Sleeps `RATE_LIMIT_MS` (4500 ms) between batches to stay within the 15-requests-per-minute limit.
+6. Attempts to write the enriched JSON back to the original `scanFile`. If the write fails with
+   `EACCES` (permission denied), saves to `$HOME/<basename>` instead and prints the fallback path.
+
+**Notes:**
+- `BATCH_SIZE = 100` matches the ip-api.com documented maximum. Sending more than 100 IPs in one
+  request causes the API to silently truncate the response.
+- `RATE_LIMIT_MS = 4500` gives a comfortable margin below the 15 req/min (4000 ms/req) ceiling.
+- Progress is printed as a running `[done/total] done` counter after each batch.
+- The script does not require root privileges — all network I/O uses plain HTTP on the standard
+  Node.js `http` module with no raw sockets.
+
+---
+
+---
+
+---
+
+---
+
 # report.js — Function Reference
 
 All functions below are defined in `src/report.js`. They are listed in the order they appear in the file.
@@ -1442,15 +1528,16 @@ cells.
 ## hostCard(entry)
 
 **Purpose:**
-Renders the full card for one host, combining the header (IP, hostname, owner, port count, scan
-time), optional honeypot reasons banner, port table, CVE entries per port, and credential results
-block.
+Renders the full card for one host, combining the header (IP, hostname, owner, geo label, port
+count, scan time), optional honeypot reasons banner, port table, CVE entries per port, and
+credential results block.
 
 **Parameters:**
 - `entry` `{object}` — single host entry from the scan JSON array with the following fields:
   - `host`        `{string}`          — IP address
   - `hostname`    `{string}`          — (optional) PTR-resolved hostname
   - `owner`       `{string}`          — (optional) WHOIS organisation name
+  - `geo`         `{object|null}`     — (optional) geolocation object from `geolocate.js`; `geo.city` and `geo.country` are displayed in the card header when present
   - `ports`       `{object}`          — port map passed to `portRow()`; port entries may contain a `cves` field
   - `scannedAt`   `{string}`          — ISO 8601 timestamp
   - `honeypot`    `{object}`          — (optional) `{ suspected: boolean, reasons: string[] }`
@@ -1483,8 +1570,13 @@ The resulting string can be written directly to a `.html` file with no further p
 **Returns:** `{string}` — complete `<!DOCTYPE html>` document
 
 **Notes:**
-- All CSS and JavaScript are embedded inline so the output is fully self-contained: opening it
-  without a server or network connection works correctly.
+- All CSS and JavaScript are embedded inline so the output is fully self-contained. The only
+  external dependency is Leaflet.js, loaded from a CDN `<link>` and `<script>` tag in the
+  `<head>`. The map is omitted entirely when no host has a `geo.lat` value, keeping the report
+  self-contained for scan files that were not passed through `geolocate.js`.
+- The Leaflet map renders `circleMarker` elements coloured red (honeypot), orange (credentials
+  found), or green (clean). Each marker popup shows the IP, city/country, ISP, and open port list.
+  Markers are generated from the subset of entries where `h.geo.lat != null`.
 - The `filterCards()` function, embedded in a `<script>` block, performs real-time DOM filtering
   by matching the search input against each card's full `textContent`. This covers IPs, banners,
   ports, hostnames, owner names, and CVE IDs without indexing.

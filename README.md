@@ -29,6 +29,8 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
 | CVE lookup | Parses software versions from banners and HTTP headers, queries the NVD API for matching CVEs, and writes results back into the scan JSON under a `cves` field per port. Supports 11 services; handles NVD rate limiting (5 req/30 s) |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
+| Geolocation | Queries ip-api.com batch endpoint for country, city, lat/lon, ISP, org, and AS per host; writes a `geo` field into the scan JSON. Handles rate limiting (100 IPs/batch, 4.5 s between batches). Falls back to home directory on EACCES |
+| Interactive map | HTML report renders a Leaflet.js world map with colour-coded circle markers (red = honeypot, orange = credentials found, green = clean) whenever geo data is present |
 | SIGINT handler | Ctrl+C flushes partial results before exit |
 
 ---
@@ -92,7 +94,25 @@ sudo node src/scanner.js 192.168.1.1 1 1024 --syn
 sudo node src/scanner.js 192.168.1.1 1 1024 --syn --slow
 ```
 
-### Step 2 — Enrich results with WHOIS owner data (optional)
+### Step 2 — Geolocate hosts (optional)
+
+```bash
+node src/geolocate.js <scan.json>
+```
+
+Queries the ip-api.com batch endpoint for country, city, lat/lon, ISP, org, and AS for every host
+and writes the results back into the scan JSON under a `geo` field. Uses the free tier (no signup
+needed); sends up to 100 IPs per request and pauses 4.5 s between batches to stay within the
+15-requests-per-minute limit. Does not use HTTPS (free-tier limitation). If the scan file is not
+writable, saves to the home directory instead.
+
+```bash
+node src/geolocate.js scans/scan_1748476800000.json
+```
+
+---
+
+### Step 3 — Enrich results with WHOIS owner data (optional)
 
 ```bash
 node src/enrich.js <scan.json>
@@ -107,7 +127,7 @@ node src/enrich.js scans/scan_1748476800000.json
 
 ---
 
-### Step 3 — Detect honeypots in scan results
+### Step 4 — Detect honeypots in scan results
 
 ```bash
 node src/honeypot.js <scan.json>
@@ -125,7 +145,7 @@ node src/honeypot.js scans/scan_1748476800000.json
 
 ---
 
-### Step 4 — Scan for CVEs in detected software versions (optional)
+### Step 5 — Scan for CVEs in detected software versions (optional)
 
 ```bash
 node src/vulnscan.js <scan.json>
@@ -148,7 +168,7 @@ node src/vulnscan.js scans/scan_1748476800000.json
 
 ---
 
-### Step 5 — Test credentials against scan results (optional)
+### Step 6 — Test credentials against scan results (optional)
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http]
@@ -178,7 +198,7 @@ node src/credtest.js scans/results.json config/wordlist.txt --no-http
 
 ---
 
-### Step 6 — Generate an HTML report
+### Step 7 — Generate an HTML report
 
 ```bash
 node src/report.js <scan.json> [output.html] [--min-ports=N]
@@ -208,9 +228,10 @@ node src/report.js scans/scan_1748476800000.json reports/results.html --min-port
 
 The generated report includes:
 - Summary stats: hosts with open ports, total open ports, suspected honeypots, hosts with credentials, total CVEs found
+- Leaflet.js world map with colour-coded circle markers (red = honeypot, orange = credentials found, green = clean); rendered only when `geo` data is present in the scan JSON. Each marker popup shows IP, city/country, ISP, and open ports
 - Live search/filter bar (IP, banner, port, owner)
 - Checkboxes to show only honeypots or only hosts with credentials
-- Each host displayed as a card; honeypot cards are highlighted with a red border and show detection reasons
+- Each host displayed as a card; honeypot cards are highlighted with a red border and show detection reasons; cards with geo data show a city/country label in the header
 - Per-port table with protocol badge, banner, TLS certificate details (CN, Org, Issuer, SANs, expiry), and HTTP response headers
 - CVE entries per port: clickable NVD links, severity badges (CRITICAL=red, HIGH=orange, MEDIUM=yellow, LOW=green), CVSS scores, and truncated summaries
 - Credential results shown in green at the bottom of the relevant host card
@@ -296,6 +317,16 @@ file in place. A fully-processed entry looks like this:
     },
     "scannedAt": "2026-05-29T12:00:00.000Z",
     "owner": "Example Corp",
+    "geo": {
+      "country": "Germany",
+      "countryCode": "DE",
+      "city": "Falkenstein",
+      "lat": 50.4779,
+      "lon": 12.3713,
+      "isp": "Hetzner Online GmbH",
+      "org": "Hetzner Online GmbH",
+      "as": "AS24940 Hetzner Online GmbH"
+    },
     "credentials": {
       "22": { "user": "admin", "pass": "password", "service": "SSH" },
       "80": { "user": "admin", "pass": "admin",    "service": "HTTP" }
@@ -332,11 +363,12 @@ Requires root for raw socket access. The scanner exits with an error if not run 
 PortScanner/
 ├── src/
 │   ├── scanner.js           Port scanner
+│   ├── geolocate.js         Geolocation (ip-api.com batch, writes geo field per host)
 │   ├── enrich.js            WHOIS enrichment (adds owner field)
 │   ├── honeypot.js          Honeypot detector
 │   ├── vulnscan.js          CVE lookup (NVD API, writes cves field per port)
 │   ├── credtest.js          Credential tester
-│   ├── report.js            HTML report generator
+│   ├── report.js            HTML report generator (Leaflet map when geo data present)
 │   └── utils.js             Shared helpers (jitter, runPool)
 ├── config/
 │   ├── settings.json        Tunable parameters for scanner, credtest, and honeypot

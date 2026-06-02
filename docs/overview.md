@@ -75,7 +75,35 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 2 — WHOIS ENRICHMENT  (src/enrich.js)             │
+│  PHASE 2 — GEOLOCATION  (src/geolocate.js)               │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   IP list               │  extracted from scanResults[].host
+│                         │
+│   Batched in 100s       │  BATCH_SIZE = 100 (ip-api.com limit)
+│                         │
+│   batchGeoLookup()      │  HTTP POST to ip-api.com/batch
+│     fields: country,    │  free tier — no HTTPS, no API key
+│     countryCode, city,  │
+│     lat, lon, isp,      │
+│     org, as             │
+│                         │
+│   sleep(4500ms)         │  rate limit: 15 req/min → 1 batch/4.5 s
+│     between batches     │
+│                         │
+│   entry.geo = result    │  null on lookup failure
+└──────────┬──────────────┘
+           │  scan JSON updated in place
+           │  (falls back to $HOME on EACCES)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 3 — WHOIS ENRICHMENT  (src/enrich.js)             │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -94,7 +122,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 3 — CVE LOOKUP  (src/vulnscan.js)                 │
+│  PHASE 4 — CVE LOOKUP  (src/vulnscan.js)                 │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -122,7 +150,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 4 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 5 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -169,7 +197,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 5 — HTML REPORT  (src/report.js)                  │
+│  PHASE 6 — HTML REPORT  (src/report.js)                  │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -181,13 +209,18 @@ CLI arguments
 │                         │
 │  Summary stats          │  hosts, ports, honeypots, creds, CVE counts
 │                         │
+│  Leaflet.js map         │  rendered only when geo data is present
+│    circleMarker()       │  red=honeypot, orange=creds, green=clean
+│    popup per host       │  IP, city/country, ISP, open ports
+│                         │
 │  For each host entry:   │
 │    hostCard()           │
 │      │                  │
+│      ├─ geo label       │  📍 city, country in card header
 │      ├─ portRow()       │  per-port badge, banner, cert, headers, CVEs
 │      └─ creds block     │  credential results in green
 │                         │
-│  Inline CSS + JS        │  search/filter; no external deps
+│  Inline CSS + JS        │  search/filter; Leaflet loaded from CDN
 └──────────┬──────────────┘
            │  self-contained .html file
            ▼
@@ -241,11 +274,12 @@ CLI arguments
 PortScanner/
 ├── src/
 │   ├── scanner.js          Port scanner — all scan logic lives here
+│   ├── geolocate.js        Geolocation — ip-api.com batch lookup, writes geo field per host
 │   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
 │   ├── vulnscan.js         CVE lookup — queries NVD API and writes cves field per port
 │   ├── credtest.js         Credential tester — runs after scanner produces output
-│   ├── report.js           HTML report generator — produces a self-contained dark-themed report
+│   ├── report.js           HTML report generator — self-contained dark-themed report with Leaflet map
 │   └── utils.js            Shared helpers — jitter() and runPool() used by scanner and credtest
 ├── config/
 │   ├── settings.json       Tunable parameters for scanner, credtest, and honeypot
