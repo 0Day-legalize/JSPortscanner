@@ -820,10 +820,9 @@ function renderBar() {
     // calculate ETA based on current scan rate
     let eta = "";
     if (portsScanned > 10 && pct < 1) {
-        const elapsed   = Date.now() - scanStart;
-        const totalEst  = elapsed / pct;
-        const remaining = totalEst - elapsed;
-        eta = `  eta ${formatETA(remaining)}`;
+        const elapsed      = Date.now() - scanStart;
+        const timeLeft     = (elapsed / pct) - elapsed;
+        eta = `  eta ${formatETA(timeLeft)}`;
     }
 
     process.stdout.write(`\r${eaten}${raccoon}${remaining}  ${pctStr}%  ${hits} open${eta}`);
