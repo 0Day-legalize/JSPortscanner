@@ -220,6 +220,70 @@ function sendDecoys(dstIP, dstPort) {
     }
 }
 
+// --- ʕ•ᴥ•ʔ half-open SYN scan ʕ•ᴥ•ʔ ---
+
+// Tracks in-flight SYN probes — keyed by our local source port
+const pendingSYNs = new Map();
+let synRecvSocket = null;
+
+// Detect our real outbound IP so SYN-ACK responses come back to us
+function getOutboundIP() {
+    return new Promise((resolve) => {
+        const s = dgram.createSocket("udp4");
+        s.connect(53, "8.8.8.8", () => { resolve(s.address().address); s.close(); });
+        s.on("error", () => resolve(null));
+    });
+}
+
+// Set up a receiving raw socket that listens for SYN-ACK responses
+function initSYNReceiver() {
+    if (!raw) return false;
+    try {
+        synRecvSocket = raw.createSocket({ protocol: raw.Protocol.TCP });
+        synRecvSocket.on("message", (buffer, source) => {
+            if (buffer.length < 40) return;
+
+            // IP header is included — skip it to reach the TCP header
+            const ipHdrLen = (buffer[0] & 0x0f) * 4;
+            if (buffer.length < ipHdrLen + 14) return;
+
+            const responseSrcPort = buffer.readUInt16BE(ipHdrLen);      // target's port
+            const responseDstPort = buffer.readUInt16BE(ipHdrLen + 2);  // our local port
+            const flags           = buffer[ipHdrLen + 13];
+            const isSYNACK        = (flags & 0x12) === 0x12;
+
+            const pending = pendingSYNs.get(responseDstPort);
+            if (!pending || pending.dstIP !== source || pending.dstPort !== responseSrcPort) return;
+
+            clearTimeout(pending.timer);
+            pendingSYNs.delete(responseDstPort);
+            pending.resolve(isSYNACK);
+        });
+        return true;
+    } catch { return false; }
+}
+
+// Send a SYN with our real IP and wait for SYN-ACK — never completes the handshake
+// so no application-level log is written on the target
+function probeSYNHalfOpen(dstIP, dstPort, srcIP) {
+    return new Promise((resolve) => {
+        const sock = getDecoySocket();
+        if (!sock || !synRecvSocket) { resolve(false); return; }
+
+        const srcPort = randomSourcePort();
+        const timer   = setTimeout(() => {
+            pendingSYNs.delete(srcPort);
+            resolve(false);
+        }, TIMEOUT);
+
+        pendingSYNs.set(srcPort, { dstIP, dstPort, resolve, timer });
+
+        // use our real IP so the SYN-ACK is routed back to us
+        const pkt = buildSynPacket(srcIP, dstIP, srcPort, dstPort);
+        sock.send(pkt, 0, pkt.length, dstIP, () => {});
+    });
+}
+
 // --- ʕ•ᴥ•ʔ service-appropriate probes ʕ•ᴥ•ʔ ---
 
 // Services that send a banner immediately on connect — just read passively
@@ -433,7 +497,7 @@ async function scanUDPPort(host, port) {
 
 // --- ʕ•ᴥ•ʔ host scan ʕ•ᴥ•ʔ ---
 
-async function scanHost(host, firstPort, lastPort, onProgress) {
+async function scanHost(host, firstPort, lastPort, onProgress, srcIP = null) {
     const portList  = shufflePorts(firstPort, lastPort);
     const openPorts = [];
 
@@ -475,6 +539,13 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
     const tcpTasks = portList.map((port) => async () => {
         await jitter(jMin, jMax);
         if (resolvedIP) sendDecoys(resolvedIP, port);
+
+        // half-open SYN scan — never completes TCP handshake, no application logs
+        if (synMode && srcIP && resolvedIP) {
+            const open = await probeSYNHalfOpen(resolvedIP, port, srcIP);
+            return { proto: "SYN", port, data: open ? "OPEN" : null, cert: null, headers: null };
+        }
+
         return scanTCPPort(host, port, hostname);
     });
 
@@ -535,11 +606,23 @@ if (process.getuid() !== 0) {
 
 const rawArgs    = process.argv.slice(2);
 const slowMode   = rawArgs.includes("--slow");
-const cleanArgs  = rawArgs.filter(a => a !== "--slow");
+const synMode    = rawArgs.includes("--syn");
+const cleanArgs  = rawArgs.filter(a => a !== "--slow" && a !== "--syn");
 
 const [targetFile, firstPortArg, lastPortArg, outputFile] = cleanArgs;
 
 if (slowMode) console.log("slow mode enabled — jitter 5–60s, 5 concurrent hosts\n");
+
+let srcIP = null;
+if (synMode) {
+    if (!initSYNReceiver()) {
+        console.error("--syn requires raw-socket to be installed and root access");
+        process.exit(1);
+    }
+    srcIP = await getOutboundIP();
+    if (!srcIP) { console.error("could not detect outbound IP"); process.exit(1); }
+    console.log(`half-open SYN scan — source IP ${srcIP} (no application logs on target)\n`);
+}
 
 if (!targetFile || !firstPortArg || !lastPortArg) {
     console.error("usage: sudo node src/scanner.js <target> <start-port> <end-port> [output.json]");
@@ -590,7 +673,7 @@ function onPortProgress() {
 }
 
 const tasks = hosts.map((host) => async () => {
-    const result = await scanHost(host, firstPort, lastPort, onPortProgress);
+    const result = await scanHost(host, firstPort, lastPort, onPortProgress, srcIP);
     const count  = Object.keys(result.ports).length;
 
     if (count > 0) { results.push(result); hits += count; }
