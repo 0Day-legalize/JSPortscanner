@@ -97,6 +97,9 @@ to dismiss as a single scanning source.
 
 ## 4. Decoy IPs
 
+> **TCP header reference:** [Description of TCP features — Microsoft Learn](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/description-tcp-features)
+
+
 **Implementation:** `randomPrivateIP()`, `buildSynPacket()`, `getDecoySocket()`, `sendDecoys()` —
 together these fire `DECOY_COUNT` spoofed TCP SYN packets per real probe.
 
