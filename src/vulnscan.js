@@ -50,6 +50,7 @@ function parseBanners(portInfo) {
 }
 
 // --- ʕ•ᴥ•ʔ nvd api ʕ•ᴥ•ʔ ---
+// API reference: https://nvd.nist.gov/developers/vulnerabilities
 
 /**
  * Queries the NVD REST API for CVEs matching a CPE string and version.
