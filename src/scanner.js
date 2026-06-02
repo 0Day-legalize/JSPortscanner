@@ -33,6 +33,7 @@ const REUSE_REQUESTS   = cfg.connectionReuseRequests;
 const FRAGMENT_DECOYS  = cfg.fragmentDecoys;
 const PASSIVE_PORTS    = new Set(cfg.passiveBannerPorts);
 const SMTP_PORTS       = new Set(cfg.smtpPorts);
+const SMTPS_PORTS      = new Set(cfg.smtpsTLSPorts);
 const SLOW_J_MIN       = cfg.slowJitterMinMs;
 const SLOW_J_MAX       = cfg.slowJitterMaxMs;
 const SLOW_MAX_HOST    = cfg.slowMaxHostWorkers;
@@ -319,7 +320,10 @@ function probeSYNHalfOpen(dstIP, dstPort, srcIP) {
         const sock = getDecoySocket();
         if (!sock || !synRecvSocket) { resolve(false); return; }
 
-        const srcPort = randomSourcePort();
+        // pick a source port not already in flight to avoid response misattribution
+        let srcPort;
+        do { srcPort = randomSourcePort(); } while (pendingSYNs.has(srcPort));
+
         const timer   = setTimeout(() => {
             pendingSYNs.delete(srcPort);
             resolve(false);
@@ -351,13 +355,20 @@ function probeBannerOnly(host, port) {
 }
 
 // SMTP requires a greeting exchange — send EHLO to get capability list
-function probeSMTP(host, port) {
+function probeSMTP(host, port, useTLS = false) {
     return new Promise((resolve) => {
-        const socket = net.createConnection({ host, port });
+        const isIP = isIPv4(host);
+        const socket = useTLS
+            ? tls.connect({ host, port, rejectUnauthorized: false, ...(isIP ? {} : { servername: host }) })
+            : net.createConnection({ host, port });
+        const connectEvent = useTLS ? "secureConnect" : "connect";
         let data = "";
         let greeted = false;
 
         socket.setTimeout(TIMEOUT);
+
+        // for implicit TLS (port 465) the handshake fires secureConnect before any SMTP data
+        socket.on(connectEvent, () => { /* TLS connected — wait for 220 greeting */ });
 
         socket.on("data", (chunk) => {
             data += chunk.toString("utf8");
@@ -443,8 +454,9 @@ function parseHeaders(raw) {
     const useful  = new Set(["server", "x-powered-by", "content-type", "location", "x-generator", "x-drupal-cache", "x-wordpress-cache"]);
 
     for (const line of lines) {
+        if (line.trim() === "") break;   // blank line = end of headers
         const sep = line.indexOf(":");
-        if (sep === -1) break;
+        if (sep === -1) continue;        // malformed line — skip rather than stop
         const key = line.slice(0, sep).trim().toLowerCase();
         if (useful.has(key)) headers[key] = line.slice(sep + 1).trim();
     }
@@ -488,8 +500,14 @@ async function scanTCPPort(host, port, hostname = host) {
     }
 
     if (SMTP_PORTS.has(port)) {
-        const res = await probeSMTP(host, port);
+        const res = await probeSMTP(host, port, false);
         return { proto: "SMTP", port, data: res, cert: null, headers: null };
+    }
+
+    // port 465 = SMTPS — implicit TLS first, then SMTP exchange
+    if (SMTPS_PORTS.has(port)) {
+        const res = await probeSMTP(host, port, true);
+        return { proto: "SMTPS", port, data: res, cert: null, headers: null };
     }
 
     // for everything else try TLS first then plain TCP with HTTP banner grab
