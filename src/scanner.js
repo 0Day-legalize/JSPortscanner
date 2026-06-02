@@ -207,11 +207,29 @@ function fragmentPacket(full) {
     return [f1, f2];
 }
 
+/**
+ * Returns a random IP from the same /24 subnet as the destination,
+ * skipping the real destination and the .0 and .255 addresses.
+ * Looks like internal server-to-server traffic rather than a private RFC1918 address
+ * which is impossible on the public internet and trivially flagged.
+ *
+ * @param {string} dstIP
+ * @returns {string}
+ */
+function randomSubnetIP(dstIP) {
+    const parts  = dstIP.split(".").map(Number);
+    const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
+    let host;
+    do { host = 1 + rand(253); } while (host === parts[3]);
+    return `${prefix}.${host}`;
+}
+
 function sendDecoys(dstIP, dstPort) {
     const sock = getDecoySocket();
     if (!sock) return;
     for (let i = 0; i < DECOYS; i++) {
-        const pkt = buildSynPacket(randomPrivateIP(), dstIP, randomSourcePort(), dstPort);
+        // use target's own subnet — looks like neighbor server traffic, not a private IP
+        const pkt = buildSynPacket(randomSubnetIP(dstIP), dstIP, randomSourcePort(), dstPort);
         if (FRAGMENT_DECOYS && rand(2) === 0) {
             // alternate between normal and fragmented decoys to mix traffic patterns
             const [f1, f2] = fragmentPacket(pkt);
