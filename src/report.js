@@ -39,6 +39,7 @@ function portRow(port, info) {
     const banner = info.banner || "";
     const cert   = info.cert   || null;
     const hdrs   = info.headers || null;
+    const cves   = info.cves   || null;
 
     const protoColor = proto === "TLS" ? "#4caf50" : proto === "SYN" ? "#ff9800" : proto === "SMTP" ? "#9c27b0" : "#2196f3";
 
@@ -60,12 +61,28 @@ function portRow(port, info) {
         hdrsHtml = `<div class="headers">${Object.entries(hdrs).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("")}</div>`;
     }
 
+    let cvesHtml = "";
+    if (cves) {
+        const sevColor = (s) => ({ CRITICAL: "#f44336", HIGH: "#ff9800", MEDIUM: "#ffeb3b", LOW: "#4caf50" })[s] || "#8b949e";
+        cvesHtml = cves.map(sw => `
+            <div class="cve-block">
+                <div class="cve-software">${esc(sw.software)}</div>
+                ${sw.cves.map(c => `
+                <div class="cve-entry">
+                    <a href="${esc(c.url)}" target="_blank" class="cve-id">${esc(c.id)}</a>
+                    ${c.severity ? `<span class="badge" style="background:${sevColor(c.severity)};color:#000">${esc(c.severity)}</span>` : ""}
+                    ${c.score ? `<span class="cve-score">${c.score}</span>` : ""}
+                    <span class="cve-summary">${esc(c.summary)}</span>
+                </div>`).join("")}
+            </div>`).join("");
+    }
+
     return `
         <tr>
             <td>${esc(port)}</td>
             <td>${badge(proto, protoColor)}</td>
             <td class="banner">${esc(banner)}</td>
-            <td>${certHtml}${hdrsHtml}</td>
+            <td>${certHtml}${hdrsHtml}${cvesHtml}</td>
         </tr>`;
 }
 
@@ -133,6 +150,9 @@ function buildHTML(scanFile, data) {
     const totalPorts  = data.reduce((n, h) => n + Object.keys(h.ports || {}).length, 0);
     const honeypots   = data.filter(h => h.honeypot?.suspected === true).length;
     const withCreds   = data.filter(h => h.credentials && h.credentials !== "none found").length;
+    const totalCVEs   = data.reduce((n, h) =>
+        n + Object.values(h.ports || {}).reduce((m, p) =>
+            m + (p.cves ? p.cves.reduce((k, s) => k + s.cves.length, 0) : 0), 0), 0);
     const cards       = data.map(hostCard).join("\n");
 
     return `<!DOCTYPE html>
@@ -193,6 +213,14 @@ function buildHTML(scanFile, data) {
   .creds b { color: #3fb950; }
   .cred-entry { display: inline-block; margin: 4px 8px 0 0; background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-family: monospace; }
 
+  .cve-block { margin-top: 8px; }
+  .cve-software { font-size: 11px; color: #8b949e; margin-bottom: 4px; font-weight: 600; }
+  .cve-entry { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+  .cve-id { color: #58a6ff; font-size: 12px; font-family: monospace; text-decoration: none; flex-shrink: 0; }
+  .cve-id:hover { text-decoration: underline; }
+  .cve-score { font-size: 11px; color: #8b949e; flex-shrink: 0; }
+  .cve-summary { font-size: 11px; color: #8b949e; line-height: 1.5; }
+
   .hidden { display: none; }
 </style>
 </head>
@@ -210,6 +238,7 @@ function buildHTML(scanFile, data) {
   <div class="stat"><div class="value">${totalPorts}</div><div class="label">Total open ports</div></div>
   <div class="stat"><div class="value" style="color:#f44336">${honeypots}</div><div class="label">Suspected honeypots</div></div>
   <div class="stat"><div class="value" style="color:#3fb950">${withCreds}</div><div class="label">Hosts with credentials</div></div>
+  <div class="stat"><div class="value" style="color:#ff9800">${totalCVEs}</div><div class="label">CVEs found</div></div>
 </div>
 
 <div class="controls">
