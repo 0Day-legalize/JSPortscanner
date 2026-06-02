@@ -29,10 +29,15 @@ const PARSERS = [
  * @returns {{ name: string, version: string, cpe: string }[]}
  */
 function parseBanners(portInfo) {
+    // support both old string format ("TCP: SSH-2.0-...") and new object format
+    const bannerText = typeof portInfo === "string"
+        ? portInfo.replace(/^(TCP|TLS|UDP|SMTP):\s*/i, "")
+        : portInfo.banner || "";
+
     const texts = [
-        portInfo.banner || "",
-        ...Object.values(portInfo.headers || {}),
-        portInfo.cert?.cn || "",
+        bannerText,
+        ...Object.values(typeof portInfo === "object" ? (portInfo.headers || {}) : {}),
+        typeof portInfo === "object" ? (portInfo.cert?.cn || "") : "",
     ].join(" ");
 
     const matches = [];
@@ -159,5 +164,14 @@ for (const host of scanResults) {
     }
 }
 
-fs.writeFileSync(scanFile, JSON.stringify(scanResults, null, 2), "utf8");
-console.log(`\nsaved to ${path.resolve(scanFile)}`);
+// write back — fall back to home dir if scans/ is owned by root
+let outPath = scanFile;
+try {
+    fs.writeFileSync(scanFile, JSON.stringify(scanResults, null, 2), "utf8");
+} catch (e) {
+    if (e.code === "EACCES") {
+        outPath = path.join(process.env.HOME, path.basename(scanFile));
+        fs.writeFileSync(outPath, JSON.stringify(scanResults, null, 2), "utf8");
+    } else throw e;
+}
+console.log(`\nsaved to ${path.resolve(outPath)}`);
