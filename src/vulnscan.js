@@ -4,10 +4,11 @@ import https from "node:https";
 
 // --- ʕ•ᴥ•ʔ banner parsers ʕ•ᴥ•ʔ ---
 
-// Each entry: { name, cpe, regex }
-// name    = human-readable product name
-// cpe     = CPE 2.3 vendor:product prefix used in NVD queries
-// regex   = extracts version string from banner
+/**
+ * Banner parser definitions for each supported service.
+ * Each entry provides a human-readable name, a CPE 2.3 vendor:product prefix for NVD queries,
+ * and a regex that extracts the version string from banner or header text.
+ */
 const PARSERS = [
     { name: "OpenSSH",   cpe: "openbsd:openssh",       regex: /OpenSSH[_\s]([\d.p]+)/i },
     { name: "nginx",     cpe: "nginx:nginx",            regex: /nginx\/([\d.]+)/i },
@@ -92,8 +93,13 @@ function queryCVEs(cpe, version) {
     });
 }
 
-// NVD allows ~5 requests per 30 seconds without an API key
-// sleep between requests to avoid 403 rate-limit responses
+/**
+ * Pauses execution for the given number of milliseconds.
+ *
+ * @param {number} ms - Duration to wait
+ * @returns {Promise<void>}
+ */
+// Called between NVD requests to stay within the ~5 req/30 s unauthenticated rate limit
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }

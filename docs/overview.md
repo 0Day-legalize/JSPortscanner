@@ -94,7 +94,35 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 3 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 3 — CVE LOOKUP  (src/vulnscan.js)                 │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   For each host entry:  │
+│                         │
+│   For each open port:   │
+│     parseBanners()      │  extracts name, version, CPE from
+│                         │  banner text, HTTP headers, cert CN
+│     queryCVEs()         │  HTTPS to NVD REST API v2
+│                         │  keyword: "<product> <version>"
+│                         │  returns up to 5 CVEs sorted by score
+│                         │
+│     rate limiter        │  sleeps 6 s every 5 requests
+│                         │  to respect NVD ~5 req/30 s limit
+│                         │
+│   portInfo.cves =       │  [{ software, cves[] }] written
+│     allCVEs             │  back into each port entry
+└──────────┬──────────────┘
+           │  scan JSON updated in place
+           │  (falls back to $HOME on EACCES)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 4 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -141,7 +169,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 4 — HTML REPORT  (src/report.js)                  │
+│  PHASE 5 — HTML REPORT  (src/report.js)                  │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -151,12 +179,12 @@ CLI arguments
 ┌─────────────────────────┐
 │   buildHTML()           │
 │                         │
-│  Summary stats          │  hosts, ports, honeypots, creds counts
+│  Summary stats          │  hosts, ports, honeypots, creds, CVE counts
 │                         │
 │  For each host entry:   │
 │    hostCard()           │
 │      │                  │
-│      ├─ portRow()       │  per-port badge, banner, cert, headers
+│      ├─ portRow()       │  per-port badge, banner, cert, headers, CVEs
 │      └─ creds block     │  credential results in green
 │                         │
 │  Inline CSS + JS        │  search/filter; no external deps
@@ -215,6 +243,7 @@ PortScanner/
 │   ├── scanner.js          Port scanner — all scan logic lives here
 │   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
+│   ├── vulnscan.js         CVE lookup — queries NVD API and writes cves field per port
 │   ├── credtest.js         Credential tester — runs after scanner produces output
 │   ├── report.js           HTML report generator — produces a self-contained dark-themed report
 │   └── utils.js            Shared helpers — jitter() and runPool() used by scanner and credtest

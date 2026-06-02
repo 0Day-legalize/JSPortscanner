@@ -28,10 +28,10 @@ function badge(text, color) {
 
 /**
  * Renders one table row for an open port, including its protocol badge, banner, TLS certificate
- * details, and HTTP response headers.
+ * details, HTTP response headers, and any CVEs found by vulnscan.js.
  *
  * @param {string} port - Port number string used as the row label
- * @param {object} info - Port entry from the scan JSON (`proto`, `banner`, `cert`, `headers`)
+ * @param {object} info - Port entry from the scan JSON (`proto`, `banner`, `cert`, `headers`, `cves`)
  * @returns {string} HTML `<tr>` element string
  */
 function portRow(port, info) {
@@ -138,8 +138,9 @@ function hostCard(entry) {
 
 /**
  * Builds the complete self-contained HTML document for the scan report.
- * Computes summary statistics, renders every host card, and embeds the
- * search/filter script and all CSS inline so the file needs no external assets.
+ * Computes five summary statistics (hosts, ports, honeypots, credentials, CVEs), renders every
+ * host card, and embeds the search/filter script and all CSS inline so the file needs no external
+ * assets.
  *
  * @param {string}   scanFile - Original scan file path, shown in the report header
  * @param {object[]} data     - Parsed scan JSON array (one entry per host)

@@ -1387,7 +1387,8 @@ each port in the port table.
 
 **Purpose:**
 Renders one `<tr>` for the port table inside a host card. Handles the optional TLS certificate
-block and HTTP headers block; absent fields are omitted rather than rendered as empty cells.
+block, HTTP headers block, and CVE block; absent fields are omitted rather than rendered as empty
+cells.
 
 **Parameters:**
 - `port` `{string}` — port number string (e.g. `"443"`)
@@ -1396,6 +1397,7 @@ block and HTTP headers block; absent fields are omitted rather than rendered as 
   - `banner`  `{string}` — first line of the service response
   - `cert`    `{object}` — TLS certificate object with `cn`, `org`, `issuer`, `sans`, `expires`
   - `headers` `{object}` — HTTP fingerprinting headers key/value map
+  - `cves`    `{Array}`  — CVE results from `vulnscan.js`; array of `{ software, cves[] }` objects
 
 **Returns:** `{string}` — HTML `<tr>` element
 
@@ -1405,6 +1407,9 @@ block and HTTP headers block; absent fields are omitted rather than rendered as 
   at a glance.
 - The SANs list is truncated to 5 entries with a `+N more` suffix to prevent cards from growing
   unwieldy on wildcard or multi-SAN certificates.
+- CVE severity badge colours: CRITICAL=red (`#f44336`), HIGH=orange (`#ff9800`),
+  MEDIUM=yellow (`#ffeb3b`), LOW=green (`#4caf50`). Each CVE ID is a clickable link to
+  `nvd.nist.gov`. The CVSS score and a truncated summary (up to 120 characters) are shown inline.
 
 ---
 
@@ -1412,14 +1417,15 @@ block and HTTP headers block; absent fields are omitted rather than rendered as 
 
 **Purpose:**
 Renders the full card for one host, combining the header (IP, hostname, owner, port count, scan
-time), optional honeypot reasons banner, port table, and credential results block.
+time), optional honeypot reasons banner, port table, CVE entries per port, and credential results
+block.
 
 **Parameters:**
 - `entry` `{object}` — single host entry from the scan JSON array with the following fields:
   - `host`        `{string}`          — IP address
   - `hostname`    `{string}`          — (optional) PTR-resolved hostname
   - `owner`       `{string}`          — (optional) WHOIS organisation name
-  - `ports`       `{object}`          — port map passed to `portRow()`
+  - `ports`       `{object}`          — port map passed to `portRow()`; port entries may contain a `cves` field
   - `scannedAt`   `{string}`          — ISO 8601 timestamp
   - `honeypot`    `{object}`          — (optional) `{ suspected: boolean, reasons: string[] }`
   - `credentials` `{object|"none found"}` — (optional) credential map from credtest
@@ -1429,6 +1435,7 @@ time), optional honeypot reasons banner, port table, and credential results bloc
 **Notes:**
 - Honeypot reason strings are joined with `<br>` and displayed in a full-width warning strip
   immediately below the card header, using a red border and dark red background to draw attention.
+- CVE data is rendered inside each port row via `portRow()`, not at the card level.
 - The credential block is rendered only when `entry.credentials` exists and is not the literal
   string `"none found"`. Each cracked port is shown as a monospace inline chip.
 - `entry.scannedAt` is truncated to 19 characters (`2026-05-28T12:00:00`) by slicing before the
@@ -1439,7 +1446,7 @@ time), optional honeypot reasons banner, port table, and credential results bloc
 ## buildHTML(scanFile, data)
 
 **Purpose:**
-Assembles the complete self-contained HTML document. Computes four summary statistics at the top,
+Assembles the complete self-contained HTML document. Computes five summary statistics at the top,
 renders every host as a card, and embeds the `filterCards()` search function and all CSS inline.
 The resulting string can be written directly to a `.html` file with no further processing.
 
@@ -1454,9 +1461,12 @@ The resulting string can be written directly to a `.html` file with no further p
   without a server or network connection works correctly.
 - The `filterCards()` function, embedded in a `<script>` block, performs real-time DOM filtering
   by matching the search input against each card's full `textContent`. This covers IPs, banners,
-  ports, hostnames, and owner names without indexing.
-- Summary stats are derived in a single pass over `data` using `reduce` and `filter` before any
-  HTML is generated — no additional passes over the data are needed.
+  ports, hostnames, owner names, and CVE IDs without indexing.
+- Summary stats computed: total hosts with open ports, total open ports, suspected honeypots,
+  hosts with credentials, and total CVE count across all ports. The CVE count is a nested reduce
+  over `port.cves[].cves[]` and is shown in orange in the stats bar.
+- Stats are derived in a single pass over `data` before any HTML is generated — no additional
+  passes are needed.
 
 ---
 
@@ -1485,6 +1495,121 @@ node src/report.js --help
 - The process exits with code `1` when called with no arguments so that shell pipelines and
   scripts can detect a missing operand. `--help` with a valid `scanFile` exits with code `0`.
 - No root or special privileges are required — the script only reads and writes ordinary files.
+
+---
+
+---
+
+---
+
+# vulnscan.js — Function Reference
+
+All functions below are defined in `src/vulnscan.js`. They are listed in the order they appear in
+the file.
+
+---
+
+## parseBanners(portInfo)
+
+**Purpose:**
+Extracts software name, version string, and CPE prefix from a port entry by running all parser
+regexes against the combined text of the banner, HTTP response headers, and TLS certificate CN.
+Supports both the current port-entry object format and the legacy plain-string format.
+
+**Parameters:**
+- `portInfo` `{object|string}` — port entry from the scan JSON; either an object with optional
+  `banner`, `headers`, and `cert.cn` fields, or a legacy string prefixed with `"TCP:"` / `"TLS:"` etc.
+
+**Returns:** `{{ name: string, version: string, cpe: string }[]}` — one entry per matched software;
+empty array if no version strings are found
+
+**Notes:**
+- All text sources (banner, every header value, cert CN) are joined into a single string before
+  matching so that a version appearing only in an HTTP header (e.g. `x-powered-by: PHP/8.2`) is
+  still detected.
+- The 11 supported parsers are defined in the module-level `PARSERS` constant. Each entry provides
+  a human-readable name, a CPE 2.3 `vendor:product` prefix, and a version-extraction regex.
+- A port entry can match more than one parser (e.g. nginx version from `Server` header and PHP
+  version from `X-Powered-By`). All matches are returned.
+
+**Example:**
+```js
+parseBanners({ banner: "SSH-2.0-OpenSSH_8.9p1", headers: { "x-powered-by": "PHP/8.2" } });
+// => [
+//      { name: "OpenSSH", version: "8.9p1", cpe: "openbsd:openssh" },
+//      { name: "PHP",     version: "8.2",   cpe: "php:php" }
+//    ]
+```
+
+---
+
+## queryCVEs(cpe, version)
+
+**Purpose:**
+Queries the NVD REST API v2 for CVEs matching a product and version, returning up to 5 results
+sorted by CVSS score descending.
+
+**Parameters:**
+- `cpe`     `{string}` — CPE `vendor:product` string (e.g. `"openbsd:openssh"`)
+- `version` `{string}` — version string extracted by `parseBanners` (e.g. `"8.9p1"`)
+
+**Returns:** `{Promise<Array>}` — array of CVE objects, each with:
+- `id`       `{string}` — CVE identifier (e.g. `"CVE-2023-38408"`)
+- `severity` `{string|null}` — `"CRITICAL"`, `"HIGH"`, `"MEDIUM"`, `"LOW"`, or `null`
+- `score`    `{number|null}` — CVSS base score, or `null` if unavailable
+- `summary`  `{string}` — English description truncated to 120 characters
+- `url`      `{string}` — direct link to the NVD entry
+
+**Notes:**
+- The NVD keyword query uses only the product name and version (the product name is taken from the
+  second segment of the CPE string). This is intentional — full CPE 2.3 match queries require an
+  API key and have stricter format requirements.
+- CVSS v3.1 metrics are preferred; the function falls back to CVSS v2 if v3.1 data is absent.
+- Network errors and JSON parse failures both resolve to an empty array rather than rejecting, so
+  a single unreachable NVD endpoint does not abort the entire scan.
+- Results are sorted by `score` descending (highest severity first). Entries with no score sort to
+  the bottom.
+
+**Example:**
+```js
+const cves = await queryCVEs("openbsd:openssh", "8.9p1");
+// => [{ id: "CVE-2023-38408", severity: "CRITICAL", score: 9.8, summary: "...", url: "..." }]
+```
+
+---
+
+## vulnscan.js — Entry Point
+
+**CLI syntax:**
+```
+node src/vulnscan.js <scan.json>
+node src/vulnscan.js --help
+```
+
+**Argument parsing:**
+- `process.argv[2]` (`scanFile`) — path to the scan JSON to enrich
+- `--help` / `-h` — print usage and exit 0; exit 1 if `scanFile` is also absent
+
+**Behaviour:**
+1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
+2. Reads and parses the scan JSON synchronously.
+3. For every host, iterates all open port entries and calls `parseBanners()` on each.
+4. For each matched software version, calls `queryCVEs()`. Pauses 6 seconds after every 5
+   requests to stay within the NVD unauthenticated rate limit (~5 req/30 s).
+5. If any CVEs are found for a port, writes `portInfo.cves = [{ software, cves[] }]` into the
+   in-memory scan object.
+6. Attempts to write the enriched JSON back to the original `scanFile`. If the write fails with
+   `EACCES` (permission denied), saves to `$HOME/<basename>` instead and prints the fallback path.
+
+**Notes:**
+- Runs entirely as top-level `await` in ESM; no explicit `main()` wrapper.
+- The rate-limit counter (`queriesMade`) is global across all hosts and ports so the pause
+  interval is consistent regardless of how many ports are processed per host.
+- A port entry receives a `cves` field only if at least one software match produced at least one
+  CVE. Ports with unrecognised software, or recognised software with no known CVEs, are left
+  unchanged.
+- The script modifies the scan JSON in place. Run on a copy if you want to preserve the
+  unenriched version.
 
 ---
 

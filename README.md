@@ -27,6 +27,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | PTR hostname | Reverse DNS lookup stored in `hostname` field when it differs from the IP |
 | WHOIS enrichment | Queries whois.ripe.net for each host and adds an `owner` field |
 | Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
+| CVE lookup | Parses software versions from banners and HTTP headers, queries the NVD API for matching CVEs, and writes results back into the scan JSON under a `cves` field per port. Supports 11 services; handles NVD rate limiting (5 req/30 s) |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 | SIGINT handler | Ctrl+C flushes partial results before exit |
 
@@ -123,7 +124,30 @@ node src/honeypot.js scans/scan_1748476800000.json
 
 ---
 
-### Step 4 — Test credentials against scan results (optional)
+### Step 4 — Scan for CVEs in detected software versions (optional)
+
+```bash
+node src/vulnscan.js <scan.json>
+```
+
+Parses software versions from service banners and HTTP response headers, queries the
+[NVD REST API](https://nvd.nist.gov/developers/vulnerabilities) for matching CVEs, and writes
+results back into the scan JSON under a `cves` field on each port entry. Supports 11 services:
+OpenSSH, nginx, Apache, Exim, Postfix, Dovecot, ProFTPD, vsftpd, OpenSSL, PHP, and WordPress.
+
+NVD rate-limits unauthenticated requests to ~5 per 30 seconds. The script pauses automatically
+to respect this limit; scans with many open ports will take a few minutes.
+
+If the scan file is not writable (e.g. owned by root), the enriched JSON is saved to the home
+directory instead and the path is printed.
+
+```bash
+node src/vulnscan.js scans/scan_1748476800000.json
+```
+
+---
+
+### Step 5 — Test credentials against scan results (optional)
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...]
@@ -148,7 +172,7 @@ node src/credtest.js scans/results.json config/wordlist.txt --hosts=192.168.1.1,
 
 ---
 
-### Step 5 — Generate an HTML report
+### Step 6 — Generate an HTML report
 
 ```bash
 node src/report.js <scan.json> [output.html]
@@ -173,11 +197,12 @@ node src/report.js scans/scan_1748476800000.json reports/results.html
 ```
 
 The generated report includes:
-- Summary stats: hosts with open ports, total open ports, suspected honeypots, hosts with credentials
+- Summary stats: hosts with open ports, total open ports, suspected honeypots, hosts with credentials, total CVEs found
 - Live search/filter bar (IP, banner, port, owner)
 - Checkboxes to show only honeypots or only hosts with credentials
 - Each host displayed as a card; honeypot cards are highlighted with a red border and show detection reasons
 - Per-port table with protocol badge, banner, TLS certificate details (CN, Org, Issuer, SANs, expiry), and HTTP response headers
+- CVE entries per port: clickable NVD links, severity badges (CRITICAL=red, HIGH=orange, MEDIUM=yellow, LOW=green), CVSS scores, and truncated summaries
 - Credential results shown in green at the bottom of the relevant host card
 
 ---
@@ -211,7 +236,8 @@ user:123456
 ## Output
 
 Results are saved as JSON to `scans/` by default (one file per run, timestamped).
-After running `credtest.js`, successfully cracked ports are merged into the same file:
+Each subsequent step (`enrich.js`, `honeypot.js`, `vulnscan.js`, `credtest.js`) enriches the same
+file in place. A fully-processed entry looks like this:
 
 ```json
 [
@@ -241,7 +267,21 @@ After running `credtest.js`, successfully cracked ports are merged into the same
           "sans": ["example.com", "www.example.com"],
           "expires": "Jan  1 00:00:00 2027 GMT"
         },
-        "headers": { "server": "nginx/1.24.0", "x-powered-by": "PHP/8.2" }
+        "headers": { "server": "nginx/1.24.0", "x-powered-by": "PHP/8.2" },
+        "cves": [
+          {
+            "software": "nginx 1.24.0",
+            "cves": [
+              {
+                "id": "CVE-2024-7347",
+                "severity": "MEDIUM",
+                "score": 4.7,
+                "summary": "NGINX Open Source and NGINX Plus have a vulnerability...",
+                "url": "https://nvd.nist.gov/vuln/detail/CVE-2024-7347"
+              }
+            ]
+          }
+        ]
       }
     },
     "scannedAt": "2026-05-29T12:00:00.000Z",
@@ -280,6 +320,7 @@ PortScanner/
 │   ├── scanner.js           Port scanner
 │   ├── enrich.js            WHOIS enrichment (adds owner field)
 │   ├── honeypot.js          Honeypot detector
+│   ├── vulnscan.js          CVE lookup (NVD API, writes cves field per port)
 │   ├── credtest.js          Credential tester
 │   ├── report.js            HTML report generator
 │   └── utils.js             Shared helpers (jitter, runPool)
