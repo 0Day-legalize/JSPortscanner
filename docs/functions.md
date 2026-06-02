@@ -130,7 +130,7 @@ is unavailable or the process does not have the required privileges.
 ## sendDecoys(dstIP, dstPort)
 
 **Purpose:**
-Sends `DECOY_COUNT` spoofed TCP SYN packets to the target immediately before the real probe.
+Sends `DECOYS` spoofed TCP SYN packets to the target immediately before the real probe.
 Each decoy uses a source IP from `randomDecoyIP`, drawn from the scan target pool or the
 destination's /24, making it look like multiple neighbor hosts are connecting at the same time.
 
@@ -790,6 +790,95 @@ scanme.example.com
 parseTargetFile("config/targets.txt");
 // => ["10.0.1.5", "scanme.example.com", "192.168.0.1", "192.168.0.2", ..., "192.168.0.14"]
 ```
+
+---
+
+## scanStart (constant)
+
+**Purpose:**
+Records the Unix timestamp (milliseconds) at the moment scanning begins. Used by `renderBar` to
+compute elapsed time for the live ETA calculation.
+
+**Type:** `{number}` — value of `Date.now()` captured once at scan start, before any host tasks
+are queued
+
+**Notes:**
+- Declared at module scope so both `renderBar` and any future progress consumers share the same
+  reference point without re-reading the clock.
+- Must be set after the host list is resolved and `totalPorts` is known, because ETA is only
+  meaningful once the denominator is fixed.
+
+---
+
+## formatETA(ms)
+
+**Purpose:**
+Converts a remaining-time estimate in milliseconds to a compact human-readable string shown in
+the progress bar.
+
+**Parameters:**
+- `ms` `{number}` — remaining milliseconds; values ≤ 0 return `"done"`
+
+**Returns:** `{string}` — formatted string in one of three forms:
+- `"done"` when `ms` ≤ 0
+- `"45s"` for remainders under one minute
+- `"3m 12s"` for remainders under one hour (seconds component omitted when exactly on a minute boundary)
+- `"2h 3m"` for remainders of one hour or more
+
+**Notes:**
+- Seconds are computed with `Math.ceil` so the display never reaches zero before the scan
+  actually finishes — avoids a jarring `0s` flash.
+- Hours format deliberately drops seconds (`"2h 3m"` not `"2h 3m 7s"`) because sub-minute
+  precision is noise at that scale.
+
+**Example:**
+```js
+formatETA(84000);   // => "1m 24s"
+formatETA(45200);   // => "46s"
+formatETA(7380000); // => "2h 3m"
+formatETA(0);       // => "done"
+```
+
+---
+
+## renderBar()
+
+**Purpose:**
+Writes an in-place progress line to stdout showing the raccoon progress bar, percentage complete,
+open-port count, and a live ETA. Called after every completed probe via `onPortProgress`.
+
+**Parameters:** none
+
+**Returns:** `{void}`
+
+**Notes:**
+- Uses `\r` (carriage return without newline) so each update overwrites the previous line in place
+  rather than producing a new line per probe.
+- ETA is suppressed for the first 10 probes (`portsScanned > 10`) because the rate estimate is
+  too noisy until a meaningful sample of elapsed time has accumulated.
+- ETA is also suppressed once `pct >= 1` (scan complete) to avoid printing a stale estimate after
+  the final probe resolves.
+- The `remaining` variable inside the ETA block is a separate `const` scoped to the `if` block;
+  it shadows the outer `remaining` bar-segment variable without conflict.
+- Output format: `···ʕ•ᴥ•ʔ···  35%  3 open  eta 1m 24s`
+
+---
+
+## onPortProgress()
+
+**Purpose:**
+Increments the completed-probe counter and triggers a progress bar redraw. Passed as the
+`onProgress` callback into every `scanHost` call.
+
+**Parameters:** none
+
+**Returns:** `{void}`
+
+**Notes:**
+- Called from the `onResult` inner function inside `scanHost` once per probe regardless of whether
+  the port is open or closed, so the bar advances at a consistent rate across all targets.
+- Kept as a named top-level function (rather than an inline arrow) so the reference passed to
+  `scanHost` is stable and readable in stack traces.
 
 ---
 
