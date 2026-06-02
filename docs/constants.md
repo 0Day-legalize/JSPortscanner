@@ -345,6 +345,155 @@ service log.
 That port receives a TLS probe first. If the service is plaintext, TLS fails, the plain TCP
 fallback runs, and the result is still correct — just slower and noisier.
 
+**Note:** `plaintextPorts` is no longer the primary dispatch mechanism in `scanTCPPort`. That
+function now uses `passiveBannerPorts` and `smtpPorts` first. `plaintextPorts` remains in the
+config for reference and may be used by other callers.
+
+---
+
+### passiveBannerPorts
+
+| Property | Value |
+|---|---|
+| Default | `[22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23]` |
+| Type | `number[]` (loaded as a `Set`) |
+| Scope | `PASSIVE_PORTS` — first dispatch check at the top of `scanTCPPort()` |
+
+**What it controls:**
+TCP ports that are handed to `probeBannerOnly` instead of the TLS-first HTTP probe strategy.
+These are services that send a banner immediately on connect; they must not receive an HTTP request
+or a TLS `ClientHello` because that would produce a visible protocol-mismatch error in the service
+log — a reliable scanner fingerprint.
+
+| Port(s) | Protocol |
+|---|---|
+| 22, 2222 | SSH |
+| 21 | FTP |
+| 110, 995 | POP3, POP3S |
+| 143, 993 | IMAP, IMAPS |
+| 3306 | MySQL |
+| 5432 | PostgreSQL |
+| 6379 | Redis |
+| 27017 | MongoDB |
+| 23 | Telnet |
+
+**Effect of adding a port:**
+That port receives a passive banner read — no HTTP request, no TLS handshake. Use this for any
+plaintext protocol that sends a greeting on connect.
+
+**Effect of removing a port:**
+That port falls through to the TLS-first HTTP strategy. This will produce protocol-mismatch errors
+in the service log and waste a connection slot on a failed TLS handshake.
+
+---
+
+### smtpPorts
+
+| Property | Value |
+|---|---|
+| Default | `[25, 587]` |
+| Type | `number[]` (loaded as a `Set`) |
+| Scope | `SMTP_PORTS` — second dispatch check in `scanTCPPort()`, after `passiveBannerPorts` |
+
+**What it controls:**
+TCP ports that are handed to `probeSMTP`, which performs a proper EHLO exchange (waits for the
+`220` greeting, sends `EHLO mail.example.com`, collects the capability reply). A bare TCP read
+or HTTP probe against SMTP would log a protocol error and yield less information.
+
+**Effect of adding a port:**
+Non-standard SMTP deployments (e.g. port 2525) receive the EHLO probe instead of an HTTP request.
+
+**Effect of removing a port:**
+That port falls through to the TLS-first HTTP strategy, which will produce errors in the SMTP log.
+
+---
+
+### slowJitterMinMs
+
+| Property | Value |
+|---|---|
+| Default | `5000` (ms) |
+| Type | `number` |
+| Scope | Lower bound of the per-probe delay when `--slow` is active |
+
+**What it controls:**
+The minimum inter-probe jitter when the scanner is invoked with `--slow`. Replaces `jitterMinMs`
+for all TCP and UDP tasks in that mode.
+
+**Effect of increasing:**
+Longer guaranteed floor between probes — slower scan, lower IDS-detectable probe rate.
+
+**Effect of decreasing toward `jitterMinMs`:**
+Narrows the gap between normal and slow mode. Values below ~1 000 ms provide little meaningful
+difference from the default mode.
+
+---
+
+### slowJitterMaxMs
+
+| Property | Value |
+|---|---|
+| Default | `60000` (ms) |
+| Type | `number` |
+| Scope | Upper bound of the per-probe delay when `--slow` is active |
+
+**What it controls:**
+The maximum inter-probe jitter in slow mode. Combined with `slowJitterMinMs`, defines the delay
+distribution `U[5s, 60s]` with a mean of 32.5 seconds per probe.
+
+**Effect of increasing:**
+Wider spread makes the timing signature harder to fingerprint statistically; significantly longer
+total scan time.
+
+**Effect of decreasing toward `slowJitterMinMs`:**
+Narrows the distribution to near-fixed delays. Must be `>= slowJitterMinMs`.
+
+---
+
+### slowMaxHostWorkers
+
+| Property | Value |
+|---|---|
+| Default | `5` |
+| Type | `number` (integer) |
+| Scope | Host-level `runPool` concurrency when `--slow` is active |
+
+**What it controls:**
+How many hosts are scanned concurrently in slow mode. Replaces `maxHostWorkers` when `--slow` is
+active. Peak sockets in slow mode = `slowMaxHostWorkers × (slowMaxTCPConnections + maxUDPConnections)`
+= `5 × (10 + 20)` = 150.
+
+**Effect of increasing:**
+More concurrent hosts — faster scan but higher aggregate probe rate, reducing the stealth benefit
+of slow mode.
+
+**Effect of decreasing to 1:**
+Fully sequential host scanning — maximum stealth, minimum network footprint.
+
+---
+
+### slowMaxTCPConnections
+
+| Property | Value |
+|---|---|
+| Default | `10` |
+| Type | `number` (integer) |
+| Scope | Per-host TCP `runPool` concurrency when `--slow` is active |
+
+**What it controls:**
+Maximum TCP probes in flight per host in slow mode. Replaces `maxTCPConnections` when `--slow` is
+active.
+
+**Interaction with slow jitter:**
+Effective TCP probe rate in slow mode ≈ `slowMaxTCPConnections / avgSlowJitter` =
+`10 / 32.5s ≈ 0.3 probes/sec` — well below any volume-based IDS threshold.
+
+**Effect of increasing:**
+Faster per-host TCP scan in slow mode at the cost of a higher instantaneous connection count.
+
+**Effect of decreasing to 1:**
+Fully sequential TCP probing per host — one port at a time with full jitter between each.
+
 ---
 
 ## credtest section
@@ -815,10 +964,6 @@ Additional legacy host key types are treated as Cowrie tells.
 
 **Effect of removing an entry:**
 That host key type is no longer flagged during live KEX probing.
-
----
-
-*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
 
 ---
 

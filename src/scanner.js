@@ -163,11 +163,11 @@ function getDecoySocket() {
 
 /**
  * Splits a complete SYN packet into two IP fragments.
- * Fragment 1 carries the first 8 bytes of TCP (src+dst port+seq), fragment 2 the rest.
+ * Fragment 1 carries the first 16 bytes of the TCP section, fragment 2 the remaining 24.
  * Some IDS systems inspect fragments individually and miss the SYN because they
  * can't reassemble fast enough — the target OS reassembles normally.
  *
- * @param {Buffer} full - Complete 40-byte packet from buildSynPacket
+ * @param {Buffer} full - Complete 60-byte packet from buildSynPacket
  * @returns {[Buffer, Buffer]} Two IP fragment buffers
  */
 function fragmentPacket(full) {

@@ -162,6 +162,9 @@ CLI arguments
 | SIGINT handler in scanner | Ctrl+C flushes the in-progress results array to disk before the process exits, preserving partial scans |
 | Port validation at startup | NaN, out-of-range, or inverted port arguments exit early with a clear error rather than producing an empty or corrupt scan |
 | Rotating Referer, Accept-Language, Cookie per probe | Each HTTP banner probe uses a different randomly chosen value from the configured lists, making all probes from the same scan look like different browser sessions |
+| `--slow` mode | A single CLI flag drops to 5 concurrent hosts, 10 TCP connections, and 5–60s jitter; all limits are read from `settings.json` so no code changes are needed |
+| Service-appropriate probe dispatch in `scanTCPPort` | Ports in `PASSIVE_PORTS` use `probeBannerOnly` (passive read, no HTTP); ports in `SMTP_PORTS` use `probeSMTP` (EHLO exchange); all others use the TLS-first HTTP strategy — prevents protocol-mismatch errors appearing in service logs |
+| TCP options in decoy SYN packets | MSS(1460), SACK, Timestamps, NOP, Window Scale(7) make the 60-byte packet match a real Linux kernel SYN, defeating OS-fingerprint-based decoy detection |
 
 ---
 
@@ -197,10 +200,6 @@ PortScanner/
 - `basic-ftp` npm package (optional — required for FTP credential testing)
 - `axios` npm package (optional — required for HTTP/HTTPS credential testing)
 - Root / `sudo` (enforced at scanner startup — required by raw socket API)
-
----
-
-*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
 
 ---
 

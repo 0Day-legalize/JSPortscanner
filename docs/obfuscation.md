@@ -107,6 +107,9 @@ port. Each packet has:
   `192.168.x.x`)
 - A randomised IP ID, TTL (64–127), and TCP sequence number
 - A randomised TCP window size
+- TCP options matching the Linux kernel default SYN fingerprint: MSS(1460), SACK permitted,
+  Timestamps (random TSval), NOP, Window Scale(7) — making the 60-byte packet
+  indistinguishable from a genuine Linux SYN at the packet level
 - A valid, correctly computed IP and TCP checksum (required for the packet to be accepted by the
   kernel and network stack)
 - The SYN flag set (identical to a connection initiation)
@@ -135,7 +138,7 @@ Byte offset   Field                  Value
 ─────────────────────────────────────────────────────
 0             IP version + IHL       0x45  (IPv4, header = 5×4 = 20 bytes)
 1             DSCP/ECN               0x00
-2–3           Total length           40    (IP header + TCP header, no payload)
+2–3           Total length           60    (20 IP + 20 TCP header + 20 TCP options)
 4–5           IP identification      random uint16
 6–7           Flags + fragment       0x4000 (DF bit, no fragmentation)
 8             TTL                    random in [64, 127]
@@ -148,11 +151,17 @@ Byte offset   Field                  Value
 22–23         TCP dest port          target port being scanned
 24–27         Sequence number        random uint32
 28–31         Acknowledgement        0
-32            Data offset            0x50  (5 × 4 = 20 bytes, no options)
+32            Data offset            0xA0  (10 × 4 = 40 bytes, with options)
 33            Flags                  0x02  (SYN)
 34–35         Window size            random | 0x1000 (minimum 4096)
-36–37         TCP checksum           computed over pseudo-header + TCP segment
+36–37         TCP checksum           computed over pseudo-header + TCP segment (length=40)
 38–39         Urgent pointer         0
+
+40–43         TCP option: MSS        kind=2, len=4, value=1460 (standard Ethernet MTU)
+44–45         TCP option: SACK       kind=4, len=2 (SACK permitted)
+46–55         TCP option: Timestamps kind=8, len=10, TSval=random, TSecr=0
+56            TCP option: NOP        kind=1 (alignment padding)
+57–59         TCP option: Wscale     kind=3, len=3, shift=7 (matches Ubuntu/Debian default)
 ```
 
 **What the target sees:**
@@ -181,34 +190,47 @@ The real scanner's IP is buried in the noise of four apparent internal connectio
 
 ---
 
-## 5. TLS plaintext skip-list (`PLAINTEXT_PORTS`)
+## 5. Service-appropriate probe dispatch (`PASSIVE_PORTS` and `SMTP_PORTS`)
 
-**Implementation:** `PLAINTEXT_PORTS` constant (a `Set`) checked at the top of `scanTCPPort`.
+**Implementation:** Two `Set` constants — `PASSIVE_PORTS` and `SMTP_PORTS` — checked at the top of
+`scanTCPPort` before any TLS or HTTP probe is attempted.
 
 **What it does:**
-Ports `21, 22, 23, 25, 53, 3306, 5432, 6379, 27017` are probed with plain TCP immediately, without
-attempting a TLS handshake first.
+Instead of a single TLS skip-list, `scanTCPPort` now dispatches each port to the most appropriate
+probe strategy:
+
+- **`PASSIVE_PORTS`** (SSH 22/2222, FTP 21, POP3 110/995, IMAP 143/993, MySQL 3306, PostgreSQL 5432,
+  Redis 6379, MongoDB 27017, Telnet 23): `probeBannerOnly` — opens a TCP connection and reads
+  whatever the service sends on connect, without writing anything.
+- **`SMTP_PORTS`** (25, 587): `probeSMTP` — waits for the `220` greeting then sends `EHLO mail.example.com`
+  to elicit the capability list.
+- **All other ports**: TLS-first strategy unchanged (`tryTLSConnect` → `tryTCPConnect` fallback).
 
 **Why it helps:**
-This is primarily a stealth/precision concern rather than an IDS-evasion technique. Attempting a
-TLS `ClientHello` against SSH (port 22) or MySQL (port 3306) produces a visible failed handshake
-in server logs and IDS alerts. The server logs "unknown SSL error" or "protocol mismatch", which is
-a distinct fingerprint of a TLS-naive scanner. By skipping TLS on known plaintext ports:
+Sending an HTTP HEAD request or a TLS `ClientHello` to a service that speaks SSH, FTP, or SMTP
+produces a protocol-mismatch error in the service log — a clear scanner fingerprint. Sending
+`EHLO` to SMTP is the minimum correct interaction and elicits more information than a bare TCP
+connect. By dispatching each port to a matching probe:
 
-1. No spurious TLS error events appear in service logs.
-2. No failed TLS handshake packets hit the wire before the real probe.
-3. Scan time is cut roughly in half for these ports (one connection instead of two).
+1. No protocol-mismatch errors appear in service logs.
+2. No failed TLS handshake packets hit the wire for plaintext services.
+3. SMTP capability data (supported extensions, STARTTLS availability) is captured rather than a
+   raw banner fragment.
 
 | Scenario | What service logs show |
 |---|---|
-| Without skip-list | TLS handshake failure on port 22 → "Bad protocol version" in sshd log |
-| With skip-list | Clean TCP connect followed by valid SSH banner exchange |
+| HTTP probe to SSH | `"Bad packet length"` / `"Protocol mismatch"` in sshd log — visible scanner fingerprint |
+| TLS probe to MySQL | `"SSL connection error: protocol version"` in MySQL error log |
+| Passive read to SSH | Clean connect + banner read — normal client behaviour |
+| EHLO to SMTP | Normal SMTP handshake — indistinguishable from a mail server greeting |
 
 **Gotchas:**
-- The list is static. Services running on non-standard ports (e.g. MySQL on port 13306) will still
-  receive a TLS probe first. This is unavoidable without per-service probing logic.
-- The list does not include every plaintext protocol — just the most common ones. Adding a port to
-  this set is the correct way to suppress unwanted TLS attempts.
+- Both sets are static. A service running SSH on a non-standard port that is not in `PASSIVE_PORTS`
+  will still receive an HTTP probe. Adding the port to `passiveBannerPorts` in `settings.json`
+  is the correct fix.
+- `plaintextPorts` in `settings.json` is still present for other callers but is no longer used
+  by `scanTCPPort` for dispatch decisions — `PASSIVE_PORTS` and `SMTP_PORTS` have superseded it
+  for that purpose.
 
 ---
 
@@ -278,10 +300,6 @@ Four independent techniques combine here:
   — passing an IP as `servername` causes handshake failures on some TLS implementations.
 - A sufficiently sophisticated IDS that fingerprints scanner behaviour (rather than string matching)
   will still detect the probe pattern regardless of header content.
-
----
-
-*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
 
 ---
 

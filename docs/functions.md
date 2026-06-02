@@ -92,7 +92,7 @@ header.writeUInt16BE(checksum, 10); // write back into header checksum field
 ## buildSynPacket(srcIP, dstIP, srcPort, dstPort)
 
 **Purpose:**
-Constructs a complete 40-byte raw IP/TCP packet with the SYN flag set and a spoofed source address.
+Constructs a complete 60-byte raw IP/TCP packet with the SYN flag set and a spoofed source address.
 This packet is handed directly to the raw socket and sent without kernel TCP stack involvement,
 which is what allows the source IP to be anything we choose.
 
@@ -102,9 +102,14 @@ which is what allows the source IP to be anything we choose.
 - `srcPort` `{number}` — source port number written into the TCP header (1024–65535)
 - `dstPort` `{number}` — destination port number for the SYN
 
-**Returns:** `{Buffer}` — 40-byte packet ready to pass to `socket.send()`
+**Returns:** `{Buffer}` — 60-byte packet ready to pass to `socket.send()`
 
 **Notes:**
+- **Packet layout:** 20-byte IP header + 20-byte TCP header + 20-byte TCP options = 60 bytes. The
+  data offset field is set to `0xA0` (10 × 4 = 40 bytes) to account for the options block.
+- **TCP options (bytes 40–59):** MSS(1460), SACK permitted, Timestamps (random TSval, TSecr=0),
+  NOP (alignment pad), Window Scale(7). This matches the default Linux kernel SYN fingerprint,
+  making the decoy indistinguishable from a genuine connection at the TCP options level.
 - **IP ID** is randomised on every call. A fixed or incrementing ID is an easy scanner fingerprint.
 - **TTL** is randomised in the range 64–127, covering both Linux (64) and Windows (128) defaults, so
   packets do not share a single identifiable hop count.
@@ -112,10 +117,8 @@ which is what allows the source IP to be anything we choose.
 - **Window size** is randomised with a minimum of `0x1000` (4096) bytes to avoid zero-window packets
   being filtered by network gear.
 - The IP checksum is computed over bytes 0–19 only. The TCP checksum requires a 12-byte
-  pseudo-header (source IP, dest IP, zero byte, protocol 6, TCP length) prepended to the TCP
-  segment before checksumming — this is the RFC 793 pseudo-header construction.
-- The packet has no TCP options and no payload, so the IP total length is always exactly 40 and the
-  TCP data offset is always 5 (20 bytes / 4).
+  pseudo-header (source IP, dest IP, zero byte, protocol 6, TCP length = 40) prepended to the
+  TCP segment before checksumming — this is the RFC 793 pseudo-header construction.
 
 **Example:**
 ```js
@@ -227,6 +230,66 @@ sequential SYN packets. Shuffling removes that signal entirely.
 ```js
 shufflePorts(1, 5);
 // => [3, 1, 5, 2, 4]  (example — actual order is random each call)
+```
+
+---
+
+## probeBannerOnly(host, port)
+
+**Purpose:**
+Opens a plain TCP connection and waits for the service to send an unsolicited banner, then closes
+the socket. Used for protocols that send a greeting immediately on connect (SSH, FTP, POP3, IMAP,
+MySQL, Redis, Telnet) where sending an HTTP request would produce a visible protocol-mismatch error
+in the service log and be a scanner fingerprint.
+
+**Parameters:**
+- `host` `{string}` — IP address or hostname to connect to
+- `port` `{number}` — destination port number
+
+**Returns:** `{Promise<string|null>}`
+- Trimmed banner string if the service sent data
+- `null` on connection failure, timeout, or an empty response
+
+**Notes:**
+- The socket is destroyed immediately on the first `data` event. Waiting for the full `close` event
+  to resolve the promise means the returned string is always the complete first chunk received.
+- Ports dispatched here are defined in `PASSIVE_PORTS` (`passiveBannerPorts` in `settings.json`).
+  This set currently includes: 22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23.
+
+**Example:**
+```js
+const banner = await probeBannerOnly("10.0.0.1", 22);
+// => "SSH-2.0-OpenSSH_9.3p1 Ubuntu-1ubuntu3.6"
+```
+
+---
+
+## probeSMTP(host, port)
+
+**Purpose:**
+Opens a plain TCP connection to an SMTP port, waits for the `220` greeting, sends `EHLO`, and
+collects the capability response. A raw TCP or HTTP probe against SMTP would log a protocol error;
+the EHLO exchange is the minimum correct interaction that elicits service information.
+
+**Parameters:**
+- `host` `{string}` — IP address or hostname to connect to
+- `port` `{number}` — SMTP port number (typically 25 or 587)
+
+**Returns:** `{Promise<string|null>}`
+- Full accumulated response (greeting + EHLO reply) if the exchange completed
+- `null` on connection failure, timeout, or missing greeting
+
+**Notes:**
+- Ports dispatched here are defined in `SMTP_PORTS` (`smtpPorts` in `settings.json`): 25 and 587.
+- The `greeted` flag prevents sending `EHLO` more than once if the server sends the `220` greeting
+  in multiple TCP segments.
+- The socket is destroyed as soon as a `250 ` or `250-` line is received — the first of those
+  reliably indicates the EHLO reply is complete.
+
+**Example:**
+```js
+const data = await probeSMTP("10.0.0.1", 25);
+// => "220 mail.example.com ESMTP\r\n250-mail.example.com\r\n250 STARTTLS\r\n"
 ```
 
 ---
@@ -370,10 +433,10 @@ if (result) {
 ## scanTCPPort(host, port, hostname)
 
 **Purpose:**
-Orchestrates the TLS-first probe strategy for a single port. TLS is attempted first because
-connecting with plain TCP to a TLS port produces no useful data (the server responds with a TLS
-`ClientHello` requirement, not a plaintext banner). By trying TLS first we get banner data from
-HTTPS, SMTPS, and similar services without a wasted round-trip.
+Dispatches each port to the probe strategy appropriate for its service, then returns a uniform
+result object for accumulation by `scanHost`. The dispatch order is: passive banner read for ports
+in `PASSIVE_PORTS`, EHLO exchange for ports in `SMTP_PORTS`, then TLS-first HTTP banner grab for
+everything else.
 
 **Parameters:**
 - `host`     `{string}` — IP address or hostname
@@ -382,27 +445,32 @@ HTTPS, SMTPS, and similar services without a wasted round-trip.
   `tryTCPConnect` for use in TLS SNI and the HTTP `Host` header
 
 **Returns:** `{Promise<{proto: string, port: number, data: string|null, cert: object|null, headers: object|null}>}`
-- `proto`   — `"TLS"` if the TLS probe succeeded, `"TCP"` otherwise
+- `proto`   — `"TCP"` for passive/SMTP probes, `"TLS"` if TLS succeeded, `"SMTP"` for SMTP ports
 - `port`    — echoed back for result aggregation
 - `data`    — response text, or `null` if the port is closed
-- `cert`    — parsed certificate fields from `extractCert`, or `null` for non-TLS ports or when no cert was presented
+- `cert`    — parsed certificate fields from `extractCert`, or `null` for non-TLS ports
 - `headers` — fingerprinting headers from `parseHeaders`, or `null` when no watched headers were present
 
 **Notes:**
-- Ports in `PLAINTEXT_PORTS` skip `tryTLSConnect` entirely. Attempting a TLS handshake against
-  port 22 (SSH) or port 3306 (MySQL) would always fail and waste two connection slots.
-- If TLS returns `null` and plain TCP is attempted, the final result uses proto `"TCP"` regardless
-  of whether plain TCP also returns null. The proto field reflects what protocol actually got data,
-  not what was tried last.
-- Both probes are never run simultaneously. The plain TCP probe only starts if TLS returned null,
-  avoiding two simultaneous connections to the same port.
-- `headers` is parsed from the response text of whichever probe succeeded. On a plain TCP port
-  `cert` is always `null`.
+- **`PASSIVE_PORTS` dispatch:** ports like SSH (22/2222), FTP (21), POP3 (110/995), IMAP (143/993),
+  MySQL (3306), Redis (6379), Telnet (23) go to `probeBannerOnly`. An HTTP probe against these
+  services creates a protocol-mismatch error entry in the service log — a clear scanner fingerprint.
+- **`SMTP_PORTS` dispatch:** ports 25 and 587 go to `probeSMTP`, which performs the minimum
+  valid EHLO exchange to get capability data without triggering SMTP error logging.
+- **TLS-first fallback:** all other ports attempt TLS first. If the handshake fails, plain TCP
+  with an HTTP HEAD probe is tried. Both probes are never run simultaneously.
+- `proto` reflects which strategy was used, not merely what was tried last. A successful TLS probe
+  sets `proto: "TLS"`; a successful SMTP probe sets `proto: "SMTP"`.
+- `headers` is only populated for HTTP/HTTPS responses. `cert` is only populated for successful
+  TLS connections.
 
 **Example:**
 ```js
 const result = await scanTCPPort("192.168.1.1", 443);
 // => { proto: "TLS", port: 443, data: "HTTP/1.1 200 OK\r\n...", cert: { cn: "example.com", ... }, headers: { server: "nginx" } }
+
+const result = await scanTCPPort("192.168.1.1", 22);
+// => { proto: "TCP", port: 22, data: "SSH-2.0-OpenSSH_9.3p1 Ubuntu-3", cert: null, headers: null }
 ```
 
 ---
@@ -646,14 +714,16 @@ detectable probe-rate distribution.
 **Notes:**
 - The distribution is uniform, not Gaussian — a Gaussian clusters around its mean and can still
   be statistically fingerprinted with enough samples.
-- `scanner.js` calls it with `J_MIN = 10` / `J_MAX = 250`. `credtest.js` calls it with
-  `JITTER_MIN_MS = 500` / `JITTER_MAX_MS = 2000`. The wider range in credtest keeps login
-  attempt rates below account lockout thresholds.
+- `scanner.js` calls it with `J_MIN = 10` / `J_MAX = 250` in normal mode, or `SLOW_J_MIN = 5000` /
+  `SLOW_J_MAX = 60000` when `--slow` is active. `credtest.js` calls it with `JITTER_MIN_MS = 500` /
+  `JITTER_MAX_MS = 2000`. The wider credtest range keeps login attempt rates below account lockout
+  thresholds.
 
 **Example:**
 ```js
-await jitter(10, 250);   // scanner — fast, wide
-await jitter(500, 2000); // credtest — slow, wide
+await jitter(10, 250);      // scanner — normal mode
+await jitter(5000, 60000);  // scanner — slow mode
+await jitter(500, 2000);    // credtest
 ```
 
 ---
@@ -1168,10 +1238,6 @@ node src/enrich.js <scan.json>
   TCP connections, which could result in rate-limiting or temporary blocks.
 - The file is overwritten in place. Run on a copy if you want to preserve the unenriched version.
 - Hosts for which `whoisLookup` returns `null` (timeout, unreachable) get `owner: "unknown"`.
-
----
-
-*Documentation written with assistance from [Claude](https://claude.ai) — used for documentation, package understanding, and packet crafting reference.*
 
 ---
 

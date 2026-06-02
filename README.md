@@ -13,8 +13,10 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | HTTP header parsing | Extracts Server, X-Powered-By, Content-Type, and other fingerprinting headers |
 | UDP scanning | Detects open and ICMP-confirmed closed ports |
 | Parallel scanning | 50 hosts in parallel, 50 TCP + 20 UDP workers per host |
+| Slow mode | `--slow` flag drops to 5 concurrent hosts, 10 TCP connections, and 5–60s jitter |
+| Service-appropriate probes | Passive banner read for SSH/FTP/POP3/IMAP/MySQL/Redis/Telnet; proper EHLO exchange for SMTP |
 | Port shuffle | Fisher-Yates randomised scan order per host |
-| Jitter | Random 10–250ms delay before each probe |
+| Jitter | Random 10–250ms delay before each probe (5–60s in slow mode) |
 | Random source port | Breaks sequential local port fingerprint in decoy packets |
 | Decoy IPs | Fires spoofed RFC1918 SYN packets before each real probe (requires root) |
 | CIDR support | Accepts `/16`–`/32` ranges in target file |
@@ -52,10 +54,14 @@ npm install
 ### Step 1 — Scan for open ports
 
 ```bash
-sudo node src/scanner.js <target> <start-port> <end-port> [output.json]
+sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow]
 ```
 
-`<target>` can be a **targets file**, a **single IP**, or a **CIDR block**:
+`<target>` can be a **targets file**, a **single IP**, or a **CIDR block**.
+
+| Flag | Effect |
+|---|---|
+| `--slow` | 5 concurrent hosts, 10 TCP connections per host, 5–60s jitter — for low-noise scans |
 
 ```bash
 # Scan from a targets file
@@ -69,6 +75,9 @@ sudo node src/scanner.js 10.0.0.0/24 80 443
 
 # Custom output file
 sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
+
+# Low-noise scan with extended jitter
+sudo node src/scanner.js 192.168.1.1 1 1024 --slow
 ```
 
 ### Step 2 — Enrich results with WHOIS owner data (optional)
@@ -202,7 +211,7 @@ After running `credtest.js`, successfully cracked ports are merged into the same
 
 ## How Decoy Mode Works
 
-Before each real TCP probe, the scanner fires `4` spoofed SYN packets from random private IP addresses (RFC1918). The target logs see:
+Before each real TCP probe, the scanner fires `4` spoofed SYN packets from random private IP addresses (RFC1918). Each packet is 60 bytes (20-byte IP header + 40-byte TCP header with options: MSS, SACK permitted, Timestamps, NOP, Window Scale) — indistinguishable from a real Linux SYN. The target logs see:
 
 ```
 10.45.23.11   → target:port   (decoy)
