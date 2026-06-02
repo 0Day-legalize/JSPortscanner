@@ -774,7 +774,7 @@ if (!targetFile || !firstPortArg || !lastPortArg) {
 const firstPort  = Number.parseInt(firstPortArg, 10);
 const lastPort   = Number.parseInt(lastPortArg, 10);
 
-if (isNaN(firstPort) || isNaN(lastPort) || firstPort < 1 || lastPort > 65535 || firstPort > lastPort) {
+if (Number.isNaN(firstPort) || Number.isNaN(lastPort) || firstPort < 1 || lastPort > 65535 || firstPort > lastPort) {
     console.error("invalid port range — must be 1–65535 with start <= end");
     process.exit(1);
 }
