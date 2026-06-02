@@ -807,7 +807,10 @@ function formatETA(ms) {
     if (ms <= 0) return "done";
     const s = Math.ceil(ms / 1000);
     if (s < 60)  return `${s}s`;
-    if (s < 3600) return `${Math.floor(s / 60)}m${s % 60 > 0 ? ` ${s % 60}s` : ""}`;
+    if (s < 3600) {
+        const secs = s % 60 > 0 ? ` ${s % 60}s` : "";
+        return `${Math.floor(s / 60)}m${secs}`;
+    }
     return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 

@@ -128,7 +128,8 @@ for (const host of scanResults) {
         if (version) {
             portInfo.version = version;
             detected++;
-            console.log(`  ${host.host}:${portNum} — ${version.vendor} ${version.version}${version.os ? ` (${version.os})` : ""}`);
+            const osSuffix = version.os ? ` (${version.os})` : "";
+            console.log(`  ${host.host}:${portNum} — ${version.vendor} ${version.version}${osSuffix}`);
         }
     }
 }

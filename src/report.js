@@ -59,7 +59,8 @@ function portRow(port, info) {
 
     let hdrsHtml = "";
     if (hdrs) {
-        hdrsHtml = `<div class="headers">${Object.entries(hdrs).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("")}</div>`;
+        const hdrRows = Object.entries(hdrs).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+        hdrsHtml = `<div class="headers">${hdrRows}</div>`;
     }
 
     let cvesHtml = "";
