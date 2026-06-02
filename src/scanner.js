@@ -45,7 +45,10 @@ const randomReferer  = () => REFERERS[rand(REFERERS.length)];
 const randomLanguage = () => LANGUAGES[rand(LANGUAGES.length)];
 const randomCookie   = () => COOKIES[rand(COOKIES.length)];
 
-// builds one HTTP HEAD request string — pipelined requests simulate real browser session
+// builds one HTTP HEAD request — all headers randomised per call so each request
+// in the pipeline looks like it came from a different browser state.
+// keepAlive=true on all but the last request; the final one sends Connection: close
+// so the server knows to close after responding, matching real browser keep-alive behaviour.
 const buildRequest = (hostname, keepAlive) =>
     `HEAD ${randomPath()} HTTP/1.1\r\n` +
     `Host: ${hostname}\r\n` +
@@ -337,12 +340,12 @@ function probeSMTP(host, port) {
 
         socket.on("data", (chunk) => {
             data += chunk.toString("utf8");
-            // wait for the 220 greeting then send EHLO
+            // SMTP opens with a 220 greeting — only after that can we send EHLO
             if (!greeted && data.includes("220")) {
                 greeted = true;
                 socket.write("EHLO mail.example.com\r\n");
             }
-            // got the EHLO response — done
+            // 250 (single-line) or 250- (multi-line continuation) signals EHLO accepted
             if (greeted && (data.includes("250 ") || data.includes("250-"))) {
                 socket.destroy();
             }
@@ -492,7 +495,8 @@ function tryUDPConnect(host, port) {
         const socket = dgram.createSocket("udp4");
         let done = false;
 
-        // guard against multiple events resolving the same promise
+        // both message and error can fire before close — this guard ensures
+        // the promise resolves exactly once regardless of event order
         function finish(result) {
             if (done) return;
             done = true;
