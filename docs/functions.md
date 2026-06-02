@@ -576,7 +576,98 @@ await runPool(tasks, 50, ({ port, data }) => {
 
 ---
 
-## scanHost(host, firstPort, lastPort)
+## getOutboundIP()
+
+**Purpose:**
+Detects the machine's real outbound IP address so that SYN probes in `--syn` mode use the correct
+source IP and the resulting SYN-ACK packets are routed back to this host. A UDP socket is
+connected to `8.8.8.8:53` without sending any data — the OS selects the right source address as
+part of routing, which is then read from `socket.address()`.
+
+**Parameters:** none
+
+**Returns:** `{Promise<string|null>}`
+- Dotted-decimal outbound IP address on success
+- `null` if the socket could not be created or an error occurred
+
+**Notes:**
+- No actual UDP packet is transmitted. `dgram.connect()` only triggers the kernel routing table
+  lookup; it does not send anything to Google's DNS server.
+- Only called when `--syn` is active. The result is passed to every `probeSYNHalfOpen` call so the
+  SYN-ACK from the target has a valid destination.
+
+**Example:**
+```js
+const srcIP = await getOutboundIP();
+// => "10.0.0.5"
+```
+
+---
+
+## initSYNReceiver()
+
+**Purpose:**
+Creates a raw TCP socket that captures all inbound TCP packets and resolves pending
+`probeSYNHalfOpen` promises when a matching SYN-ACK arrives. The socket is stored in
+`synRecvSocket` and kept alive for the duration of the process.
+
+**Parameters:** none
+
+**Returns:** `{boolean}` — `true` if the raw socket was set up successfully, `false` if
+`raw-socket` is unavailable or the process lacks root privileges
+
+**Notes:**
+- Each received packet includes the IP header — `(buffer[0] & 0x0f) * 4` computes the variable
+  header length before reading the TCP fields.
+- A pending probe is looked up by `responseDstPort` (the destination port in the inbound packet,
+  which equals the source port the scanner used when sending the SYN). The `dstIP` and `dstPort`
+  fields in the pending entry are cross-checked against the packet source to prevent resolving a
+  probe with an unrelated packet.
+- `isSYNACK` is passed as the resolve value so `probeSYNHalfOpen` can distinguish an open port
+  (SYN-ACK received) from a timeout (false) without a separate error path.
+- Only called when `--syn` is active. Failure causes the process to exit with an error rather than
+  degrade silently, because a silent failure would report all ports as closed.
+
+---
+
+## probeSYNHalfOpen(dstIP, dstPort, srcIP)
+
+**Purpose:**
+Probes one TCP port using a half-open SYN scan. The scanner sends a SYN and waits for a SYN-ACK
+but never sends the final ACK, so the three-way handshake is never completed. Application-layer
+daemons (SSH, NGINX, Apache, Cowrie) only log connections after the handshake finishes — they never
+see this probe.
+
+**Parameters:**
+- `dstIP`   `{string}` — destination IP in dotted-decimal
+- `dstPort` `{number}` — TCP port to probe
+- `srcIP`   `{string}` — real outbound IP from `getOutboundIP`; must be the machine's actual
+  address so the SYN-ACK is routed back to us
+
+**Returns:** `{Promise<boolean>}` — `true` if a SYN-ACK was received within `TIMEOUT` ms (port
+open), `false` on timeout or if raw sockets are unavailable
+
+**Notes:**
+- The probe is registered in `pendingSYNs` before the packet is sent so there is no window where
+  a fast SYN-ACK could arrive before the entry exists.
+- A random source port is chosen per probe via `randomSourcePort()`. The source port is both the
+  `pendingSYNs` map key and the field `initSYNReceiver` uses to match inbound SYN-ACKs back to
+  this call.
+- On timeout, the entry is removed from `pendingSYNs` to prevent the map from growing without
+  bound across a long scan run.
+- Uses the same `getDecoySocket()` raw socket as the decoy system — no additional file descriptor
+  is consumed per probe.
+
+**Example:**
+```js
+const open = await probeSYNHalfOpen("192.168.1.1", 22, "10.0.0.5");
+// => true  (SYN-ACK received — port is open)
+// => false (timeout — port is closed or filtered)
+```
+
+---
+
+## scanHost(host, firstPort, lastPort, onProgress, srcIP)
 
 **Purpose:**
 Scans the full port range on one host, running TCP and UDP pools concurrently, and returns a
@@ -585,14 +676,18 @@ function (rather than inline code) so that `runPool` at the host level can paral
 multiple targets.
 
 **Parameters:**
-- `host`      `{string}` — IP address or hostname to scan
-- `firstPort` `{number}` — start of port range, inclusive
-- `lastPort`  `{number}` — end of port range, inclusive
+- `host`       `{string}`      — IP address or hostname to scan
+- `firstPort`  `{number}`      — start of port range, inclusive
+- `lastPort`   `{number}`      — end of port range, inclusive
+- `onProgress` `{Function}`    — called once per completed probe; used to advance the progress bar
+- `srcIP`      `{string|null}` — real outbound IP passed through to `probeSYNHalfOpen` in `--syn`
+  mode; `null` in normal mode
 
 **Returns:** `{Promise<{host: string, hostname?: string, ports: object, scannedAt: string}>}`
 - `host`      — echoed input value (IP or hostname passed on the CLI)
 - `hostname`  — PTR-resolved hostname, present only when it differs from `host`
 - `ports`     — plain object keyed by port number string; each value is `{ proto, banner, cert?, headers? }`;
+  in `--syn` mode values are `{ proto: "SYN" }` with no banner, cert, or headers;
   ports are sorted ascending before the object is built
 - `scannedAt` — ISO 8601 timestamp of when the scan completed
 
@@ -602,6 +697,8 @@ multiple targets.
   header. Both lookups are silently skipped on failure.
 - If DNS lookup fails the host is scanned normally but decoys are disabled (silently). The catch
   block intentionally has no body.
+- In `--syn` mode, TCP tasks call `probeSYNHalfOpen` instead of `scanTCPPort`. Results carry
+  `proto: "SYN"` and no banner, cert, or headers because the handshake never completes.
 - `hostname` is only included in the result object when the PTR hostname differs from the raw
   `host` argument, keeping the JSON compact for hosts with no PTR record.
 - `onPortResult` is an inner function rather than a top-level one because it closes over
@@ -614,8 +711,13 @@ multiple targets.
 
 **Example:**
 ```js
-const result = await scanHost("192.168.1.1", 1, 1024);
-// => { host: "192.168.1.1", hostname: "server1.example.com", ports: { "22": { proto: "TCP", banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3" } }, scannedAt: "2026-05-29T..." }
+// Normal mode
+const result = await scanHost("192.168.1.1", 1, 1024, onProgress, null);
+// => { host: "192.168.1.1", hostname: "server1.example.com", ports: { "22": { proto: "TCP", banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3" } }, scannedAt: "..." }
+
+// --syn mode
+const result = await scanHost("192.168.1.1", 1, 1024, onProgress, "10.0.0.5");
+// => { host: "192.168.1.1", ports: { "22": { proto: "SYN" }, "80": { proto: "SYN" } }, scannedAt: "..." }
 ```
 
 ---

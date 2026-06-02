@@ -13,6 +13,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | HTTP header parsing | Extracts Server, X-Powered-By, Content-Type, and other fingerprinting headers |
 | UDP scanning | Detects open and ICMP-confirmed closed ports |
 | Parallel scanning | 50 hosts in parallel, 50 TCP + 20 UDP workers per host |
+| Half-open SYN scan | `--syn` flag sends real-source-IP SYNs without completing the TCP handshake — SSH, NGINX, Apache, and Cowrie never log the probe |
 | Slow mode | `--slow` flag drops to 5 concurrent hosts, 10 TCP connections, and 5–60s jitter |
 | Service-appropriate probes | Passive banner read for SSH/FTP/POP3/IMAP/MySQL/Redis/Telnet; proper EHLO exchange for SMTP |
 | Port shuffle | Fisher-Yates randomised scan order per host |
@@ -54,7 +55,7 @@ npm install
 ### Step 1 — Scan for open ports
 
 ```bash
-sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow]
+sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow] [--syn]
 ```
 
 `<target>` can be a **targets file**, a **single IP**, or a **CIDR block**.
@@ -62,6 +63,9 @@ sudo node src/scanner.js <target> <start-port> <end-port> [output.json] [--slow]
 | Flag | Effect |
 |---|---|
 | `--slow` | 5 concurrent hosts, 10 TCP connections per host, 5–60s jitter — for low-noise scans |
+| `--syn` | Half-open SYN scan — TCP probes never complete the handshake, so application daemons (SSH, NGINX, Apache, Cowrie) write no log entry. Requires root and the `raw-socket` package. Results have `proto: "SYN"` and no banner, cert, or headers |
+
+Flags can be combined: `--syn --slow`
 
 ```bash
 # Scan from a targets file
@@ -78,6 +82,12 @@ sudo node src/scanner.js config/targets.txt 1 1024 scans/results.json
 
 # Low-noise scan with extended jitter
 sudo node src/scanner.js 192.168.1.1 1 1024 --slow
+
+# Half-open SYN scan — no application logs on target
+sudo node src/scanner.js 192.168.1.1 1 1024 --syn
+
+# Half-open SYN scan with extended jitter
+sudo node src/scanner.js 192.168.1.1 1 1024 --syn --slow
 ```
 
 ### Step 2 — Enrich results with WHOIS owner data (optional)
@@ -178,6 +188,9 @@ After running `credtest.js`, successfully cracked ports are merged into the same
       "22": {
         "proto": "TCP",
         "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+      },
+      "8022": {
+        "proto": "SYN"
       },
       "80": {
         "proto": "TCP",

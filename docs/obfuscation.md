@@ -237,7 +237,60 @@ connect. By dispatching each port to a matching probe:
 
 ---
 
-## 6. HTTP/1.1 banner probe with PTR-resolved Host header
+## 6. Half-open SYN scan (`--syn`)
+
+**Implementation:** `getOutboundIP()`, `initSYNReceiver()`, `probeSYNHalfOpen()` — together these
+replace the normal `scanTCPPort` call for each TCP port when `--syn` is active.
+
+**What it does:**
+Instead of opening a full TCP connection, the scanner sends a single SYN packet with the real
+source IP and waits for the target to reply with a SYN-ACK (open) or RST (closed/filtered). The
+final ACK is never sent, so the kernel TCP stack on the target OS drops the half-open entry after
+its `SYN_RECV` timeout without ever passing the connection to any application.
+
+The outbound IP is determined once at startup via `getOutboundIP()` (UDP routing trick) and reused
+for all probes. A single raw receiving socket created by `initSYNReceiver()` catches all inbound
+TCP packets and resolves the matching pending probe from the `pendingSYNs` map.
+
+**Why it helps:**
+Application-layer daemons (SSH, NGINX, Apache, Cowrie, custom listeners) log connections only
+after the three-way TCP handshake completes. Because the scanner never sends the ACK, the connection
+never reaches the application:
+
+| Service | Normal full-connect | Half-open SYN |
+|---|---|---|
+| OpenSSH | Logs `"Accepted/Failed"` in `auth.log` | No log entry |
+| NGINX / Apache | Logs access line in `access.log` | No log entry |
+| Cowrie honeypot | Records connection attempt | No log entry |
+| MySQL / Redis | May log new connection | No log entry |
+
+The target OS's network stack does see the SYN (and the kernel's IDS/firewall rules still apply),
+but no user-space process receives it.
+
+**Trade-offs vs. normal mode:**
+- Results carry `proto: "SYN"` with no banner, cert, or HTTP headers — only open/closed state is
+  determined. Use normal mode for fingerprinting; use `--syn` when discovering open ports without
+  triggering service logs.
+- Requires root and the `raw-socket` npm package (same requirement as decoy mode).
+- `--syn` can be combined with `--slow` for maximum stealth: half-open probes with 5–60s jitter.
+- UDP scanning is unaffected and continues in parallel as normal.
+
+| Scenario | What service logs show |
+|---|---|
+| Normal full TCP connect to port 22 | `sshd` logs connection attempt — visible in `auth.log` |
+| `--syn` probe to port 22 | Kernel handles SYN/RST at network stack level — `sshd` writes nothing |
+
+**Gotchas:**
+- Stateful firewalls that track TCP state will see the SYN and may still generate alerts — this
+  technique evades application logs, not network-layer IDS.
+- Some hosts send RST instead of SYN-ACK even on open ports when a stateful firewall is in the
+  path. Such ports are reported as closed (`false`). Use normal mode to confirm.
+- The receiving socket captures all inbound TCP packets destined for the machine, not just SYN-ACKs.
+  High incoming TCP traffic on the scanning machine can slow SYN-ACK matching.
+
+---
+
+## 7. HTTP/1.1 banner probe with PTR-resolved Host header
 
 **Implementation:** `tryTCPConnect` and `tryTLSConnect` — after a successful connect or TLS
 handshake, each sends a full HTTP/1.1 HEAD request using the PTR-resolved hostname (from

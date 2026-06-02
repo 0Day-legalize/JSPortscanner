@@ -15,7 +15,7 @@ every detected service.
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
-  targetFile  firstPort  lastPort  [outputFile]
+  targetFile  firstPort  lastPort  [outputFile]  [--slow]  [--syn]
        │
        ▼
 ┌─────────────────────────┐
@@ -43,9 +43,13 @@ CLI arguments
 │      │  TCP pool        │  runPool(tcpTasks, MAX_TCP_CONNECTIONS)
 │      │    jitter()      │  random inter-probe delay
 │      │    sendDecoys()  │  DECOY_COUNT spoofed SYN packets
+│      │    [normal mode] │
 │      │    scanTCPPort() │
 │      │      tryTLSConnect()  ──► banner grab + cert extraction + header parsing
 │      │      tryTCPConnect()  ──► banner grab (fallback)
+│      │    [--syn mode]  │
+│      │    probeSYNHalfOpen() ──► SYN sent, SYN-ACK awaited, handshake never completed
+│      │                  │    (no application log on target; result proto="SYN")
 │      │                  │
 │      └─ UDP pool        │  runPool(udpTasks, MAX_UDP_CONNECTIONS)
 │           jitter()      │
@@ -163,6 +167,7 @@ CLI arguments
 | Port validation at startup | NaN, out-of-range, or inverted port arguments exit early with a clear error rather than producing an empty or corrupt scan |
 | Rotating Referer, Accept-Language, Cookie per probe | Each HTTP banner probe uses a different randomly chosen value from the configured lists, making all probes from the same scan look like different browser sessions |
 | `--slow` mode | A single CLI flag drops to 5 concurrent hosts, 10 TCP connections, and 5–60s jitter; all limits are read from `settings.json` so no code changes are needed |
+| `--syn` mode | Half-open SYN scan via `probeSYNHalfOpen`; the TCP handshake is never completed so application-layer daemons (SSH, NGINX, Apache, Cowrie) write no log entry for the probe; can be combined with `--slow` |
 | Service-appropriate probe dispatch in `scanTCPPort` | Ports in `PASSIVE_PORTS` use `probeBannerOnly` (passive read, no HTTP); ports in `SMTP_PORTS` use `probeSMTP` (EHLO exchange); all others use the TLS-first HTTP strategy — prevents protocol-mismatch errors appearing in service logs |
 | TCP options in decoy SYN packets | MSS(1460), SACK, Timestamps, NOP, Window Scale(7) make the 60-byte packet match a real Linux kernel SYN, defeating OS-fingerprint-based decoy detection |
 

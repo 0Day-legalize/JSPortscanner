@@ -222,11 +222,17 @@ function sendDecoys(dstIP, dstPort) {
 
 // --- ʕ•ᴥ•ʔ half-open SYN scan ʕ•ᴥ•ʔ ---
 
-// Tracks in-flight SYN probes — keyed by our local source port
+/** Tracks in-flight SYN probes keyed by our local source port number. */
 const pendingSYNs = new Map();
 let synRecvSocket = null;
 
-// Detect our real outbound IP so SYN-ACK responses come back to us
+/**
+ * Detects the machine's real outbound IP address using the UDP routing trick.
+ * A UDP socket is connected (without sending anything) so the OS selects the
+ * correct source address; that address is read back and the socket is closed.
+ *
+ * @returns {Promise<string|null>} Dotted-decimal source IP, or null on failure
+ */
 function getOutboundIP() {
     return new Promise((resolve) => {
         const s = dgram.createSocket("udp4");
@@ -235,7 +241,15 @@ function getOutboundIP() {
     });
 }
 
-// Set up a receiving raw socket that listens for SYN-ACK responses
+/**
+ * Sets up a raw TCP receiving socket that listens for inbound SYN-ACK packets.
+ * For each received packet it strips the IP header, checks the flags, and
+ * resolves the matching pending probe from `pendingSYNs` keyed by the
+ * destination port (our local source port).
+ *
+ * @returns {boolean} true if the raw socket was created successfully, false if
+ *   raw-socket is unavailable or the process lacks the required privileges
+ */
 function initSYNReceiver() {
     if (!raw) return false;
     try {
@@ -263,8 +277,19 @@ function initSYNReceiver() {
     } catch { return false; }
 }
 
-// Send a SYN with our real IP and wait for SYN-ACK — never completes the handshake
-// so no application-level log is written on the target
+/**
+ * Sends a real-source-IP SYN and waits for a SYN-ACK response without
+ * completing the handshake. Because the three-way handshake never finishes,
+ * application-layer daemons (SSH, NGINX, Apache, Cowrie) never log the
+ * connection attempt.
+ *
+ * @param {string} dstIP   - Destination IP in dotted-decimal
+ * @param {number} dstPort - TCP port to probe
+ * @param {string} srcIP   - Real outbound IP (from getOutboundIP) so the
+ *   SYN-ACK is routed back to this host
+ * @returns {Promise<boolean>} true if a SYN-ACK was received within TIMEOUT ms,
+ *   false on timeout or if the raw socket is unavailable
+ */
 function probeSYNHalfOpen(dstIP, dstPort, srcIP) {
     return new Promise((resolve) => {
         const sock = getDecoySocket();
@@ -497,6 +522,19 @@ async function scanUDPPort(host, port) {
 
 // --- ʕ•ᴥ•ʔ host scan ʕ•ᴥ•ʔ ---
 
+/**
+ * Scans the full TCP and UDP port range on a single host and returns a
+ * structured result. TCP and UDP pools run concurrently. In --syn mode the TCP
+ * tasks call probeSYNHalfOpen instead of scanTCPPort.
+ *
+ * @param {string}   host       - IP address or hostname to scan
+ * @param {number}   firstPort  - Start of port range, inclusive
+ * @param {number}   lastPort   - End of port range, inclusive
+ * @param {Function} onProgress - Called once per completed probe for the progress bar
+ * @param {string|null} srcIP   - Real outbound IP passed to probeSYNHalfOpen in
+ *   --syn mode; null in normal mode
+ * @returns {Promise<{host: string, hostname?: string, ports: object, scannedAt: string}>}
+ */
 async function scanHost(host, firstPort, lastPort, onProgress, srcIP = null) {
     const portList  = shufflePorts(firstPort, lastPort);
     const openPorts = [];
