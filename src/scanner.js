@@ -207,16 +207,23 @@ function fragmentPacket(full) {
     return [f1, f2];
 }
 
+// populated from the parsed target list so decoys come from the actual scan range
+let decoyPool = [];
+
 /**
- * Returns a random IP from the same /24 subnet as the destination,
- * skipping the real destination and the .0 and .255 addresses.
- * Looks like internal server-to-server traffic rather than a private RFC1918 address
- * which is impossible on the public internet and trivially flagged.
+ * Returns a random decoy source IP.
+ * Prefers IPs from the scan target pool (same range as the real targets) so decoys
+ * look like neighbor traffic. Falls back to the destination's /24 if the pool is empty
+ * or only contains the destination itself.
  *
  * @param {string} dstIP
  * @returns {string}
  */
-function randomSubnetIP(dstIP) {
+function randomDecoyIP(dstIP) {
+    const candidates = decoyPool.filter(ip => ip !== dstIP);
+    if (candidates.length > 0) return candidates[rand(candidates.length)];
+
+    // fallback: random host in the same /24
     const parts  = dstIP.split(".").map(Number);
     const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
     let host;
@@ -228,8 +235,7 @@ function sendDecoys(dstIP, dstPort) {
     const sock = getDecoySocket();
     if (!sock) return;
     for (let i = 0; i < DECOYS; i++) {
-        // use target's own subnet — looks like neighbor server traffic, not a private IP
-        const pkt = buildSynPacket(randomSubnetIP(dstIP), dstIP, randomSourcePort(), dstPort);
+        const pkt = buildSynPacket(randomDecoyIP(dstIP), dstIP, randomSourcePort(), dstPort);
         if (FRAGMENT_DECOYS && rand(2) === 0) {
             // alternate between normal and fragmented decoys to mix traffic patterns
             const [f1, f2] = fragmentPacket(pkt);
@@ -736,6 +742,9 @@ function resolveTargets(target) {
 }
 
 const hosts = resolveTargets(targetFile);
+
+// seed the decoy pool with the full target list so decoys come from the same range
+decoyPool = hosts;
 
 console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\n`);
 
