@@ -427,7 +427,7 @@ function tryTCPConnect(host, port, hostname) {
 function extractCert(socket) {
     try {
         const cert    = socket.getPeerCertificate();
-        if (!cert || !cert.subject) return null;
+        if (!cert?.subject) return null;
 
         const sans = cert.subjectaltname
             ? cert.subjectaltname.split(", ").map(s => s.replace(/^DNS:|^IP Address:/, ""))
