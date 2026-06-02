@@ -337,6 +337,70 @@ connection-reuse limits cutting the probe short.
 
 ---
 
+### fragmentDecoys
+
+| Property | Value |
+|---|---|
+| Default | `true` |
+| Type | `boolean` |
+| Scope | `sendDecoys()` — controls whether some decoy SYN packets are split into two IP fragments before transmission |
+
+**What it controls:**
+When `true`, each decoy SYN packet has a 50% chance of being split into two IP fragments (using
+`fragmentPacket()`) instead of being sent as a single 60-byte packet. The target OS reassembles the
+fragments normally; some IDS systems that inspect fragments individually cannot reassemble fast
+enough and miss the SYN entirely.
+
+**Effect of setting to `false`:**
+All decoy packets are sent as whole 60-byte SYN packets. Slightly simpler traffic pattern; no
+fragmentation-based IDS evasion.
+
+**Effect of leaving as `true`:**
+Roughly half the decoy packets per probe arrive as fragment pairs, mixing whole and fragmented SYNs
+and producing two distinct traffic shapes for an IDS to contend with.
+
+---
+
+### outboundProbeHost
+
+| Property | Value |
+|---|---|
+| Default | `"8.8.8.8"` |
+| Type | `string` |
+| Scope | `OUTBOUND_PROBE_HOST` constant — destination host for the `getOutboundIP()` UDP routing trick |
+
+**What it controls:**
+The IP address that `getOutboundIP()` connects a UDP socket to (without sending any data) in order
+to make the OS select and expose the correct outbound source IP via the routing table. Only used
+when `--syn` is active.
+
+**Effect of changing:**
+Use any publicly routable IP the scanning host can reach. Useful when the scanner cannot reach
+`8.8.8.8` but can reach a different external host. The value is never contacted; only the routing
+table lookup matters.
+
+---
+
+### outboundProbePort
+
+| Property | Value |
+|---|---|
+| Default | `53` |
+| Type | `number` (integer) |
+| Scope | `OUTBOUND_PROBE_PORT` constant — destination port for the `getOutboundIP()` UDP routing trick |
+
+**What it controls:**
+The port number used alongside `outboundProbeHost` in the `getOutboundIP()` UDP `connect()` call.
+No UDP packet is actually transmitted to this port; the port is only part of the routing table
+lookup that causes the OS to select the correct source address.
+
+**Effect of changing:**
+Any port number works — the value is never contacted. Change if your network blocks the default
+(e.g. UDP/53 filtered outbound) and you need to use a different port for the routing table lookup
+to succeed.
+
+---
+
 ### passiveBannerPorts
 
 | Property | Value |

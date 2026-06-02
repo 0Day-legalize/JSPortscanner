@@ -125,7 +125,7 @@ function checkSSHFingerprint(fp, port) {
  * Checks scan result ports against static honeypot indicators.
  * Returns an array of reason strings.
  *
- * @param {object} ports - Port map from scan JSON { "22": "TCP: ...", ... }
+ * @param {object} ports - Port map from scan JSON { "22": { proto: "TCP", banner: "..." }, ... }
  * @returns {string[]}
  */
 function checkHost(ports) {

@@ -584,8 +584,9 @@ await runPool(tasks, 50, ({ port, data }) => {
 **Purpose:**
 Detects the machine's real outbound IP address so that SYN probes in `--syn` mode use the correct
 source IP and the resulting SYN-ACK packets are routed back to this host. A UDP socket is
-connected to `8.8.8.8:53` without sending any data — the OS selects the right source address as
-part of routing, which is then read from `socket.address()`.
+connected to `OUTBOUND_PROBE_HOST:OUTBOUND_PROBE_PORT` (from `settings.json`) without sending any
+data — the OS selects the right source address as part of routing, which is then read from
+`socket.address()`.
 
 **Parameters:** none
 
@@ -595,7 +596,10 @@ part of routing, which is then read from `socket.address()`.
 
 **Notes:**
 - No actual UDP packet is transmitted. `dgram.connect()` only triggers the kernel routing table
-  lookup; it does not send anything to Google's DNS server.
+  lookup; it does not send data to the probe host.
+- The probe destination is read from `cfg.outboundProbeHost` and `cfg.outboundProbePort` in
+  `settings.json` (defaults: `8.8.8.8`, `53`). Changing these is useful when the scanning host
+  cannot reach public DNS but can reach an internal host on a routable address.
 - Only called when `--syn` is active. The result is passed to every `probeSYNHalfOpen` call so the
   SYN-ACK from the target has a valid destination.
 

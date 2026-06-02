@@ -255,8 +255,9 @@ let synRecvSocket = null;
 
 /**
  * Detects the machine's real outbound IP address using the UDP routing trick.
- * A UDP socket is connected (without sending anything) so the OS selects the
- * correct source address; that address is read back and the socket is closed.
+ * A UDP socket is connected to OUTBOUND_PROBE_HOST:OUTBOUND_PROBE_PORT (from
+ * settings.json) without sending any data so the OS selects the correct source
+ * address via the routing table; that address is read back and the socket is closed.
  *
  * @returns {Promise<string|null>} Dotted-decimal source IP, or null on failure
  */
