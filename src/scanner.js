@@ -625,15 +625,18 @@ async function scanHost(host, firstPort, lastPort, onProgress, srcIP = null) {
         return scanTCPPort(host, port, hostname);
     });
 
-    const udpTasks = portList.map((port) => async () => {
-        await jitter(jMin, jMax);
-        return scanUDPPort(host, port);
-    });
+    const runners = [runPool(tcpTasks, maxTCP, onResult)];
 
-    await Promise.all([
-        runPool(tcpTasks, maxTCP, onResult),
-        runPool(udpTasks, MAX_UDP, onResult),
-    ]);
+    // UDP scanning is off by default — only runs with --udp flag
+    if (udpMode) {
+        const udpTasks = portList.map((port) => async () => {
+            await jitter(jMin, jMax);
+            return scanUDPPort(host, port);
+        });
+        runners.push(runPool(udpTasks, MAX_UDP, onResult));
+    }
+
+    await Promise.all(runners);
 
     openPorts.sort((a, b) => a.port - b.port);
 
@@ -678,7 +681,8 @@ function parseTargetFile(filePath) {
 const rawArgs    = process.argv.slice(2);
 const slowMode   = rawArgs.includes("--slow");
 const synMode    = rawArgs.includes("--syn");
-const cleanArgs  = rawArgs.filter(a => a !== "--slow" && a !== "--syn");
+const udpMode    = rawArgs.includes("--udp");
+const cleanArgs  = rawArgs.filter(a => !["--slow","--syn","--udp"].includes(a));
 
 if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
     console.log(`
@@ -695,6 +699,7 @@ if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
   flags:
     --slow            jitter 5–60s per probe, 5 concurrent hosts — stays under IDS thresholds
     --syn             half-open SYN scan — never completes TCP handshake, no application logs
+    --udp             also scan UDP ports (off by default — slow, rarely useful on most targets)
     --help / -h       show this help
 
   flags can be combined:
@@ -704,6 +709,7 @@ if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
     sudo node src/scanner.js 37.27.7.128/26 22 22
     sudo node src/scanner.js config/targets.txt 1 1025 scans/out.json --slow
     sudo node src/scanner.js 37.27.7.154 1 65535 --syn
+    sudo node src/scanner.js config/targets.txt 1 1025 --udp
 `);
     process.exit(0);
 }
@@ -761,7 +767,7 @@ console.log(`scanning ${hosts.length} host(s), ports ${firstPort}–${lastPort}\
 const results     = [];
 let hits          = 0;
 let portsScanned  = 0;
-const totalPorts  = hosts.length * (lastPort - firstPort + 1) * 2; // TCP + UDP per host
+const totalPorts  = hosts.length * (lastPort - firstPort + 1) * (udpMode ? 2 : 1);
 const BAR         = 30;
 
 function renderBar() {

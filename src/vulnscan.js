@@ -132,6 +132,10 @@ if (process.argv.includes("--help") || process.argv.includes("-h") || !scanFile)
     process.exit(scanFile ? 0 : 1);
 }
 
+// distro packages (Ubuntu, Debian) backport security fixes without bumping the version number
+// e.g. OpenSSH_8.2p1 Ubuntu-4ubuntu0.13 has patches from 9.x backported — CVEs may be false positives
+console.log("note: distro-packaged software backports patches — CVE results may be false positives for Ubuntu/Debian banners\n");
+
 const scanResults = JSON.parse(fs.readFileSync(scanFile, "utf8"));
 let queriesMade   = 0;
 

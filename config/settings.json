@@ -36,7 +36,7 @@
       "lang=en; tz=Europe%2FBerlin",
       "consent=1; _fbp=fb.1.1700000000.123456789"
     ],
-    "connectionReuseRequests": 2,
+    "connectionReuseRequests": 1,
     "fragmentDecoys": true,
     "slowJitterMinMs": 5000,
     "slowJitterMaxMs": 60000,

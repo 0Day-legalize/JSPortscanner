@@ -167,12 +167,12 @@ function detectService(portNum, portValue) {
     const proto  = typeof portValue === "object" ? portValue.proto   : portValue.split(":")[0].trim();
     const banner = typeof portValue === "object" ? (portValue.banner || "") : portValue;
 
-    if (SSH_PORTS.has(portNum))                         return "ssh";
-    if (FTP_PORTS.has(portNum))                         return "ftp";
-    if (HTTPS_PORTS.has(portNum))                       return "https";
-    if (HTTP_PORTS.has(portNum))                        return "http";
-    if (proto === "TLS")                                return "https";
-    if (proto === "TCP" && banner.startsWith("HTTP"))   return "http";
+    if (SSH_PORTS.has(portNum))                                      return "ssh";
+    if (FTP_PORTS.has(portNum))                                      return "ftp";
+    if (!noHTTP && HTTPS_PORTS.has(portNum))                         return "https";
+    if (!noHTTP && HTTP_PORTS.has(portNum))                          return "http";
+    if (!noHTTP && proto === "TLS")                                  return "https";
+    if (!noHTTP && proto === "TCP" && banner.startsWith("HTTP"))     return "http";
     return null;
 }
 
@@ -262,13 +262,14 @@ const scanFile    = args[0];
 const wordlistFile = args[1];
 const hostsArg    = args.find(a => a.startsWith("--hosts="));
 const targetHosts = hostsArg ? new Set(hostsArg.replace("--hosts=", "").split(",")) : null;
+const noHTTP      = args.includes("--no-http");
 
 if (args.includes("--help") || args.includes("-h")) {
     console.log(`
   RCN Credential Tester
 
   usage:
-    node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--help]
+    node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http] [--help]
 
   arguments:
     scan.json         scan result file produced by scanner.js
@@ -276,12 +277,13 @@ if (args.includes("--help") || args.includes("-h")) {
 
   flags:
     --hosts=ip1,ip2   only test specific IPs from the scan file (comma-separated)
+    --no-http         skip HTTP/HTTPS credential testing (unreliable success detection)
     --help / -h       show this help
 
   examples:
     node src/credtest.js scans/results.json config/wordlist.txt
+    node src/credtest.js scans/results.json config/wordlist.txt --no-http
     node src/credtest.js scans/results.json config/wordlist.txt --hosts=37.27.7.154
-    node src/credtest.js scans/results.json config/wordlist.txt --hosts=37.27.7.154,37.27.7.160
 `);
     process.exit(0);
 }
