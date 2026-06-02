@@ -84,14 +84,14 @@ for (let i = 0; i < ips.length; i += BATCH_SIZE) {
         const entry = scanResults[i + idx];
         if (geo && geo.status === "success") {
             entry.geo = {
-                country:     geo.country     || null,
-                countryCode: geo.countryCode || null,
-                city:        geo.city        || null,
+                country:     geo.country     ?? null,
+                countryCode: geo.countryCode ?? null,
+                city:        geo.city        ?? null,
                 lat:         geo.lat         ?? null,
                 lon:         geo.lon         ?? null,
-                isp:         geo.isp         || null,
-                org:         geo.org         || null,
-                as:          geo.as          || null,
+                isp:         geo.isp         ?? null,
+                org:         geo.org         ?? null,
+                as:          geo.as          ?? null,
             };
             console.log(`  ${entry.host} — ${geo.city}, ${geo.country} (${geo.isp})`);
         } else {

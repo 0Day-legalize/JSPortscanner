@@ -263,7 +263,7 @@ let synRecvSocket = null;
 function getOutboundIP() {
     return new Promise((resolve) => {
         const s = dgram.createSocket("udp4");
-        s.connect(OUTBOUND_PROBE_PORT, OUTBOUND_PROBE_HOST, () => { resolve(s.address().address); s.close(); });
+        s.connect(OUTBOUND_PROBE_PORT, OUTBOUND_PROBE_HOST, () => { resolve(s.address()?.address ?? null); s.close(); });
         s.on("error", () => resolve(null));
     });
 }
@@ -434,11 +434,11 @@ function extractCert(socket) {
             : [];
 
         return {
-            cn:      cert.subject.CN   || null,
-            org:     cert.subject.O    || null,
-            issuer:  cert.issuer?.O    || null,
+            cn:      cert.subject?.CN  ?? null,
+            org:     cert.subject?.O   ?? null,
+            issuer:  cert.issuer?.O    ?? null,
             sans:    sans.length > 0   ? sans : null,
-            expires: cert.valid_to     || null,
+            expires: cert.valid_to     ?? null,
         };
     } catch { return null; }
 }

@@ -98,9 +98,9 @@ function hostCard(entry) {
     const isHoneypot   = entry.honeypot?.suspected === true;
     const honeypotNote = isHoneypot ? entry.honeypot.reasons?.join("<br>") : "";
     const portCount    = Object.keys(entry.ports || {}).length;
-    const owner        = entry.owner && entry.owner !== "unknown" ? entry.owner : null;
-    const geo          = entry.geo || null;
-    const creds        = entry.credentials && entry.credentials !== "none found" ? entry.credentials : null;
+    const owner        = entry.owner !== "unknown" ? (entry.owner ?? null) : null;
+    const geo          = entry.geo ?? null;
+    const creds        = entry.credentials !== "none found" ? (entry.credentials ?? null) : null;
 
     const portRows = Object.entries(entry.ports || {}).map(([p, info]) => portRow(p, info)).join("");
 
