@@ -29,8 +29,10 @@ const REFERERS   = cfg.referers;
 const LANGUAGES  = cfg.acceptLanguages;
 const COOKIES    = cfg.fakeCookies;
 
-const REUSE_REQUESTS   = cfg.connectionReuseRequests;
-const FRAGMENT_DECOYS  = cfg.fragmentDecoys;
+const REUSE_REQUESTS      = cfg.connectionReuseRequests;
+const FRAGMENT_DECOYS     = cfg.fragmentDecoys;
+const OUTBOUND_PROBE_HOST = cfg.outboundProbeHost;
+const OUTBOUND_PROBE_PORT = cfg.outboundProbePort;
 const PASSIVE_PORTS    = new Set(cfg.passiveBannerPorts);
 const SMTP_PORTS       = new Set(cfg.smtpPorts);
 const SMTPS_PORTS      = new Set(cfg.smtpsTLSPorts);
@@ -261,7 +263,7 @@ let synRecvSocket = null;
 function getOutboundIP() {
     return new Promise((resolve) => {
         const s = dgram.createSocket("udp4");
-        s.connect(53, "8.8.8.8", () => { resolve(s.address().address); s.close(); });
+        s.connect(OUTBOUND_PROBE_PORT, OUTBOUND_PROBE_HOST, () => { resolve(s.address().address); s.close(); });
         s.on("error", () => resolve(null));
     });
 }

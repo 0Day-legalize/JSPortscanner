@@ -38,6 +38,8 @@
     ],
     "connectionReuseRequests": 1,
     "fragmentDecoys": true,
+    "outboundProbeHost": "8.8.8.8",
+    "outboundProbePort": 53,
     "slowJitterMinMs": 5000,
     "slowJitterMaxMs": 60000,
     "slowMaxHostWorkers": 5,
