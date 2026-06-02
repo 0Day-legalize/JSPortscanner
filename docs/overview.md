@@ -148,7 +148,34 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 5 — CVE LOOKUP  (src/vulnscan.js)                 │
+│  PHASE 5 — VERSION DETECTION  (src/versiondetect.js)     │
+└──────────────────────────────────────────────────────────┘
+
+CLI arguments
+  scan.json
+       │
+       ▼
+┌─────────────────────────┐
+│   For each host entry:  │
+│                         │
+│   For each open port:   │
+│     extractText()       │  joins banner + HTTP header values + cert CN/org
+│                         │  into a single string for regex matching
+│                         │
+│     detectVersion()     │  runs 25 parsers in specificity order;
+│                         │  returns first match as
+│                         │  { service, vendor, version, os? }
+│                         │
+│   portInfo.version =    │  written back into each matched port entry
+│     { service, vendor,  │
+│       version, os? }    │
+└──────────┬──────────────┘
+           │  scan JSON updated in place
+           │  (falls back to $HOME on EACCES)
+           ▼
+
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 6 — CVE LOOKUP  (src/vulnscan.js)                 │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -176,7 +203,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 6 — CREDENTIAL TESTING  (src/credtest.js)         │
+│  PHASE 7 — CREDENTIAL TESTING  (src/credtest.js)         │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -223,7 +250,7 @@ CLI arguments
            ▼
 
 ┌──────────────────────────────────────────────────────────┐
-│  PHASE 7 — HTML REPORT  (src/report.js)                  │
+│  PHASE 8 — HTML REPORT  (src/report.js)                  │
 └──────────────────────────────────────────────────────────┘
 
 CLI arguments
@@ -243,7 +270,7 @@ CLI arguments
 │    hostCard()           │
 │      │                  │
 │      ├─ geo label       │  📍 city, country in card header
-│      ├─ portRow()       │  per-port badge, banner, cert, headers, CVEs
+│      ├─ portRow()       │  per-port badge, vendor+version, banner, cert, headers, CVEs
 │      └─ creds block     │  credential results in green
 │                         │
 │  Inline CSS + JS        │  search/filter; Leaflet loaded from CDN
@@ -282,6 +309,9 @@ CLI arguments
 | credtest jitter range is wider (500–2000ms) | Login attempts must stay below account lockout thresholds; wider spacing is safer |
 | `cracked` flag stops the wordlist on first hit | Avoids unnecessary login noise after success; most services lock accounts after N failures |
 | `raw-socket` loaded optionally | Scanner still functions (without decoys) when not running as root |
+| Version detection is a separate process | Banner parsing and regex matching adds latency that would slow down the hot scan loop; running it once post-scan over the JSON is instantaneous |
+| `versiondetect.js` parsers ordered by specificity | More specific patterns (e.g. `OpenResty` before `nginx`) appear first so they match before a broader pattern consumes the same text |
+| `versiondetect.js` falls back to `$HOME` on `EACCES` | The scan file is often owned by root; the fallback lets a non-root user run the detector without losing results |
 | Optional npm dependencies in credtest | Missing ssh2/basic-ftp/axios disables that protocol without crashing the tool |
 | `jitter` and `runPool` extracted to `utils.js` | Eliminates the previously duplicated implementations between scanner and credtest |
 | SIGINT handler in scanner | Ctrl+C flushes the in-progress results array to disk before the process exits, preserving partial scans |
@@ -303,6 +333,7 @@ PortScanner/
 │   ├── geolocate.js        Geolocation — ip-api.com batch lookup, writes geo field per host
 │   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
+│   ├── versiondetect.js    Version detector — 25 regex parsers, writes version field per port
 │   ├── vulnscan.js         CVE lookup — queries NVD API and writes cves field per port
 │   ├── credtest.js         Credential tester — runs after scanner produces output
 │   ├── report.js           HTML report generator — self-contained dark-themed report with Leaflet map

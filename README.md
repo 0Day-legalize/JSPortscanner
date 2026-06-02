@@ -27,6 +27,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | PTR hostname | Reverse DNS lookup stored in `hostname` field when it differs from the IP |
 | WHOIS enrichment | Queries whois.ripe.net for each host and adds an `owner` field |
 | Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
+| Version detection | Parses banners, HTTP headers, and TLS certificate fields using 25 regex parsers to extract `{ service, vendor, version, os? }` for each open port and writes a `version` field into the scan JSON. Covers 27 services across SSH, HTTP, FTP, SMTP/IMAP/POP3, databases, OpenVPN, Telnet, and RDP |
 | CVE lookup | Parses software versions from banners and HTTP headers, queries the NVD API for matching CVEs, and writes results back into the scan JSON under a `cves` field per port. Supports 11 services; handles NVD rate limiting (5 req/30 s) |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 | Geolocation | Queries ip-api.com batch endpoint for country, city, lat/lon, ISP, org, and AS per host; writes a `geo` field into the scan JSON. Handles rate limiting (100 IPs/batch, 4.5 s between batches). Falls back to home directory on EACCES |
@@ -145,7 +146,29 @@ node src/honeypot.js scans/scan_1748476800000.json
 
 ---
 
-### Step 5 — Scan for CVEs in detected software versions (optional)
+### Step 5 — Detect software versions in scan results (optional)
+
+```bash
+node src/versiondetect.js <scan.json>
+```
+
+Parses service banners, HTTP response headers, and TLS certificate fields using 25 regex parsers
+to extract structured `{ service, vendor, version, os? }` information for each open port. Results
+are written back into the scan JSON under a `version` field on each port entry. Covers 27 services:
+OpenSSH, Dropbear, nginx, Apache, lighttpd, IIS, Caddy, OpenResty, PHP, WordPress, ProFTPD,
+vsftpd, FileZilla, Pure-FTPd, Postfix, Exim, Sendmail, Dovecot (IMAP+POP3), Exchange, MySQL,
+MariaDB, PostgreSQL, Redis, MongoDB, OpenVPN, Telnet, and RDP.
+
+If the scan file is not writable (e.g. owned by root), the enriched JSON is saved to the home
+directory instead and the path is printed.
+
+```bash
+node src/versiondetect.js scans/scan_1748476800000.json
+```
+
+---
+
+### Step 6 — Scan for CVEs in detected software versions (optional)
 
 ```bash
 node src/vulnscan.js <scan.json>
@@ -168,7 +191,7 @@ node src/vulnscan.js scans/scan_1748476800000.json
 
 ---
 
-### Step 6 — Test credentials against scan results (optional)
+### Step 7 — Test credentials against scan results (optional)
 
 ```bash
 node src/credtest.js <scan.json> <wordlist.txt> [--hosts=ip1,ip2,...] [--no-http]
@@ -198,7 +221,7 @@ node src/credtest.js scans/results.json config/wordlist.txt --no-http
 
 ---
 
-### Step 7 — Generate an HTML report
+### Step 8 — Generate an HTML report
 
 ```bash
 node src/report.js <scan.json> [output.html] [--min-ports=N]
@@ -232,7 +255,7 @@ The generated report includes:
 - Live search/filter bar (IP, banner, port, owner)
 - Checkboxes to show only honeypots or only hosts with credentials
 - Each host displayed as a card; honeypot cards are highlighted with a red border and show detection reasons; cards with geo data show a city/country label in the header
-- Per-port table with protocol badge, banner, TLS certificate details (CN, Org, Issuer, SANs, expiry), and HTTP response headers
+- Per-port table with protocol badge, vendor+version label (when `versiondetect.js` has been run), banner, TLS certificate details (CN, Org, Issuer, SANs, expiry), and HTTP response headers
 - CVE entries per port: clickable NVD links, severity badges (CRITICAL=red, HIGH=orange, MEDIUM=yellow, LOW=green), CVSS scores, and truncated summaries
 - Credential results shown in green at the bottom of the relevant host card
 
@@ -278,7 +301,8 @@ file in place. A fully-processed entry looks like this:
     "ports": {
       "22": {
         "proto": "TCP",
-        "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6"
+        "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6",
+        "version": { "service": "SSH", "vendor": "OpenSSH", "version": "8.9p1", "os": "Ubuntu-3ubuntu0.6" }
       },
       "8022": {
         "proto": "SYN"
@@ -366,6 +390,7 @@ PortScanner/
 │   ├── geolocate.js         Geolocation (ip-api.com batch, writes geo field per host)
 │   ├── enrich.js            WHOIS enrichment (adds owner field)
 │   ├── honeypot.js          Honeypot detector
+│   ├── versiondetect.js     Service version detector (25 regex parsers, writes version field per port)
 │   ├── vulnscan.js          CVE lookup (NVD API, writes cves field per port)
 │   ├── credtest.js          Credential tester
 │   ├── report.js            HTML report generator (Leaflet map when geo data present)

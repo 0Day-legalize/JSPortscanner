@@ -1477,9 +1477,9 @@ each port in the port table.
 ## portRow(port, info)
 
 **Purpose:**
-Renders one `<tr>` for the port table inside a host card. Handles the optional TLS certificate
-block, HTTP headers block, and CVE block; absent fields are omitted rather than rendered as empty
-cells.
+Renders one `<tr>` for the port table inside a host card. Handles the optional vendor/version
+label, TLS certificate block, HTTP headers block, and CVE block; absent fields are omitted rather
+than rendered as empty cells.
 
 **Parameters:**
 - `port` `{string}` — port number string (e.g. `"443"`)
@@ -1489,6 +1489,7 @@ cells.
   - `cert`    `{object}` — TLS certificate object with `cn`, `org`, `issuer`, `sans`, `expires`
   - `headers` `{object}` — HTTP fingerprinting headers key/value map
   - `cves`    `{Array}`  — CVE results from `vulnscan.js`; array of `{ software, cves[] }` objects
+  - `version` `{object}` — structured version info from `versiondetect.js`; `{ service, vendor, version, os? }`
 
 **Returns:** `{string}` — HTML `<tr>` element
 
@@ -1496,6 +1497,9 @@ cells.
 - Protocol colours are hard-coded per protocol name: green for TLS, orange for SYN, purple for
   SMTP, blue for everything else. This makes the most security-relevant protocols visually distinct
   at a glance.
+- When a `version` field is present, vendor and version are rendered in muted grey text immediately
+  after the protocol badge (e.g. `[TLS] nginx 1.24.0`). This surfaces `versiondetect.js` results
+  inline without adding a separate column to the port table.
 - The SANs list is truncated to 5 entries with a `+N more` suffix to prevent cards from growing
   unwieldy on wildcard or multi-SAN certificates.
 - CVE severity badge colours: CRITICAL=red (`#f44336`), HIGH=orange (`#ff9800`),
@@ -1601,6 +1605,143 @@ node src/report.js --help
   scripts can detect a missing operand. `--help` or `-h` always exits with code `0`, regardless
   of whether a `scanFile` argument is present.
 - No root or special privileges are required — the script only reads and writes ordinary files.
+
+---
+
+---
+
+---
+
+# versiondetect.js — Function Reference
+
+All functions below are defined in `src/versiondetect.js`. They are listed in the order they
+appear in the file.
+
+---
+
+## PARSERS (constant)
+
+**Purpose:**
+Module-level array of 25 parser descriptors, each covering one vendor/service combination.
+`detectVersion` iterates this array in order and returns the result of the first matching entry,
+so more specific patterns must appear before broader ones that could match the same text.
+
+Each entry has the shape:
+```js
+{ service: string, vendor: string, regex: RegExp, version: (m) => string, os?: (m) => string|null }
+```
+
+**Services covered (27 total):**
+SSH: OpenSSH, Dropbear —
+HTTP servers: nginx, Apache, lighttpd, Microsoft-IIS, Caddy, OpenResty —
+App frameworks: PHP, WordPress —
+FTP: ProFTPD, vsftpd, FileZilla, Pure-FTPd —
+Mail: Postfix, Exim, Sendmail, Dovecot (IMAP), Dovecot (POP3), Exchange —
+Databases: MySQL, MariaDB, PostgreSQL, Redis, MongoDB —
+Other: OpenVPN, Telnet, RDP
+
+**Notes:**
+- Entries are ordered by specificity within each service group. OpenResty appears before nginx
+  because OpenResty banners also contain `nginx/` and would match the nginx entry if it were first.
+- Some vendors (Pure-FTPd, Exchange, Telnet, RDP) advertise no version number in their banner;
+  their `version` function returns an empty string. The resulting `version` field is `null` after
+  the empty-string-to-null coercion in `detectVersion`.
+- The `os` function is only defined on the OpenSSH parser, which extracts the trailing OS suffix
+  (e.g. `Ubuntu-3ubuntu0.6`) from the SSH version string when present.
+
+---
+
+## extractText(portInfo)
+
+**Purpose:**
+Collects all text visible from a port entry — banner, HTTP header values, and TLS certificate
+CN and org fields — into a single string for regex matching.
+
+**Parameters:**
+- `portInfo` `{object|string}` — port entry from the scan JSON; accepts both the current object
+  format (`{ banner, headers, cert }`) and a legacy bare string
+
+**Returns:** `{string}` — space-joined concatenation of all text sources
+
+**Notes:**
+- All sources are joined rather than matched individually so that a version string split across
+  a banner and a header (unlikely but possible) is still captured by a single regex run.
+- `Object.values(portInfo.headers || {})` extracts all header values without knowing which header
+  names are present; the same regex pass covers `server`, `x-powered-by`, and any future headers.
+- Missing fields (`banner`, `headers`, `cert`) are silently replaced with empty strings or empty
+  objects, so `extractText` never throws on partial port entries.
+
+**Example:**
+```js
+extractText({ banner: "SSH-2.0-OpenSSH_9.3p1", headers: null, cert: null });
+// => "SSH-2.0-OpenSSH_9.3p1  "
+```
+
+---
+
+## detectVersion(portInfo)
+
+**Purpose:**
+Runs all 25 parsers from `PARSERS` against the text collected by `extractText` and returns the
+first match as a structured object. Returns `null` when no parser matches or the port entry has
+no readable text.
+
+**Parameters:**
+- `portInfo` `{object|string}` — port entry from the scan JSON (passed through to `extractText`)
+
+**Returns:** `{{ service: string, vendor: string, version: string|null, os?: string }|null}`
+- Structured version object on the first parser match
+- `null` if no parser matches or if the port entry contains no text
+
+**Notes:**
+- Returns the first match only. If the text contains both an `nginx` and a `PHP` version string,
+  only the nginx result is returned — the one whose parser appears earlier in `PARSERS`.
+- Empty version strings returned by `parser.version(m)` are coerced to `null` before being stored
+  so callers can use a simple truthiness check on `result.version`.
+- The `os` field is only present when the matched parser defines an `os` function (currently only
+  the OpenSSH parser). Callers must guard `result.os` before accessing it.
+
+**Example:**
+```js
+detectVersion({ banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6" });
+// => { service: "SSH", vendor: "OpenSSH", version: "8.9p1", os: "Ubuntu-3ubuntu0.6" }
+
+detectVersion({ headers: { server: "nginx/1.24.0" } });
+// => { service: "HTTP", vendor: "nginx", version: "1.24.0" }
+
+detectVersion({ banner: null, headers: null });
+// => null
+```
+
+---
+
+## versiondetect.js — Entry Point
+
+**CLI syntax:**
+```
+node src/versiondetect.js <scan.json>
+node src/versiondetect.js --help
+```
+
+**Argument parsing:**
+- `process.argv[2]` (`scanFile`) — path to the scan JSON produced by `scanner.js`
+- `--help` / `-h` — print usage and exit 0; exit 1 if `scanFile` is also absent
+
+**Behaviour:**
+1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
+2. Reads and parses the scan JSON synchronously.
+3. For every host, iterates all port entries and calls `detectVersion()` on each.
+4. When a match is found, writes the result object into `portInfo.version` and prints a one-line
+   summary (`host:port — vendor version (os?)`) to stdout.
+5. Attempts to write the enriched JSON back to the original `scanFile`. If the write fails with
+   `EACCES` (permission denied), saves to `$HOME/<basename>` instead and prints the fallback path.
+6. Prints a final count: `N version(s) detected — saved to <path>`.
+
+**Notes:**
+- Runs entirely as top-level script code (no `main()` wrapper) over the synchronously loaded JSON.
+- No network I/O — all matching is performed locally against data already in the scan file.
+- Does not require root privileges.
+- The file is modified in place. Run on a copy if you want to preserve the un-annotated version.
 
 ---
 
