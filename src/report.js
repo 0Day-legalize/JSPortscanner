@@ -98,6 +98,7 @@ function hostCard(entry) {
     const honeypotNote = isHoneypot ? entry.honeypot.reasons?.join("<br>") : "";
     const portCount    = Object.keys(entry.ports || {}).length;
     const owner        = entry.owner && entry.owner !== "unknown" ? entry.owner : null;
+    const geo          = entry.geo || null;
     const creds        = entry.credentials && entry.credentials !== "none found" ? entry.credentials : null;
 
     const portRows = Object.entries(entry.ports || {}).map(([p, info]) => portRow(p, info)).join("");
@@ -109,6 +110,7 @@ function hostCard(entry) {
                 <span class="host">${esc(entry.host)}</span>
                 ${entry.hostname ? `<span class="hostname">${esc(entry.hostname)}</span>` : ""}
                 ${owner ? `<span class="owner">${esc(owner)}</span>` : ""}
+                ${geo?.city ? `<span class="geo">📍 ${esc(geo.city)}, ${esc(geo.country)}</span>` : ""}
             </div>
             <div class="card-meta">
                 ${isHoneypot ? badge("HONEYPOT", "#f44336") : ""}
@@ -155,6 +157,16 @@ function buildHTML(scanFile, data) {
         n + Object.values(h.ports || {}).reduce((m, p) =>
             m + (p.cves ? p.cves.reduce((k, s) => k + s.cves.length, 0) : 0), 0), 0);
     const cards       = data.map(hostCard).join("\n");
+    const geoHosts    = data.filter(h => h.geo?.lat != null);
+    const mapMarkers  = geoHosts.map(h => {
+        const isHoneypot = h.honeypot?.suspected === true;
+        const hasCreds   = h.credentials && h.credentials !== "none found";
+        const color      = isHoneypot ? "red" : hasCreds ? "orange" : "#4caf50";
+        const ports      = Object.keys(h.ports || {}).join(", ") || "none";
+        return `L.circleMarker([${h.geo.lat}, ${h.geo.lon}], {radius:6, color:"${color}", fillColor:"${color}", fillOpacity:0.8})
+            .bindPopup("<b>${esc(h.host)}</b><br>${esc(h.geo.city || "")}, ${esc(h.geo.country || "")}<br>ISP: ${esc(h.geo.isp || "")}<br>Ports: ${esc(ports)}")
+            .addTo(map);`;
+    }).join("\n        ");
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -223,7 +235,12 @@ function buildHTML(scanFile, data) {
   .cve-summary { font-size: 11px; color: #8b949e; line-height: 1.5; }
 
   .hidden { display: none; }
+  .geo { font-size: 12px; color: #58a6ff; }
+  #map { height: 380px; border-bottom: 1px solid #30363d; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 
@@ -241,6 +258,15 @@ function buildHTML(scanFile, data) {
   <div class="stat"><div class="value" style="color:#3fb950">${withCreds}</div><div class="label">Hosts with credentials</div></div>
   <div class="stat"><div class="value" style="color:#ff9800">${totalCVEs}</div><div class="label">CVEs found</div></div>
 </div>
+
+${geoHosts.length > 0 ? `<div id="map"></div>
+<script>
+  const map = L.map("map").setView([20, 10], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors", maxZoom: 18
+  }).addTo(map);
+  ${mapMarkers}
+</script>` : ""}
 
 <div class="controls">
   <input type="text" id="search" placeholder="Filter by IP, banner, port, owner..." oninput="filterCards()">
