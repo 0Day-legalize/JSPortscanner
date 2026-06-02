@@ -318,14 +318,15 @@ Smaller pool; more repeated cookie values across a scan run.
 | Property | Value |
 |---|---|
 | Default | `[21, 22, 23, 25, 53, 3306, 5432, 6379, 27017]` |
-| Type | `number[]` (loaded as a `Set`) |
-| Scope | Checked at the top of `scanTCPPort()` |
+| Type | `number[]` |
+| Scope | Documentation-only — not read by `scanner.js` at runtime |
 
 **What it controls:**
-TCP ports for which TLS is never attempted. Ports in this list go straight to a plain TCP probe,
-skipping the TLS-first strategy.
+Reference list of TCP ports that speak plaintext protocols and should not receive a TLS probe.
+This field is no longer read at runtime; `passiveBannerPorts` and `smtpPorts` are the active
+dispatch sets in `scanTCPPort()`.
 
-| Port | Protocol | Reason for inclusion |
+| Port | Protocol | Reason listed |
 |---|---|---|
 | 21 | FTP | FTPS uses explicit in-band upgrade (`AUTH TLS`), not TLS-on-connect |
 | 22 | SSH | Custom binary framing; a TLS ClientHello produces a visible protocol error in sshd logs |
@@ -337,17 +338,8 @@ skipping the TLS-first strategy.
 | 6379 | Redis | Plaintext by default; TLS is a compile-time option rarely enabled |
 | 27017 | MongoDB | Plaintext by default |
 
-**Effect of adding a port:**
-That port skips the TLS handshake attempt — one connection instead of two, no TLS error in the
-service log.
-
-**Effect of removing a port:**
-That port receives a TLS probe first. If the service is plaintext, TLS fails, the plain TCP
-fallback runs, and the result is still correct — just slower and noisier.
-
-**Note:** `plaintextPorts` is no longer the primary dispatch mechanism in `scanTCPPort`. That
-function now uses `passiveBannerPorts` and `smtpPorts` first. `plaintextPorts` remains in the
-config for reference and may be used by other callers.
+The active runtime equivalents of this list are `passiveBannerPorts` and `smtpPorts`. Editing
+`plaintextPorts` has no effect on scanning behaviour.
 
 ---
 
@@ -355,7 +347,7 @@ config for reference and may be used by other callers.
 
 | Property | Value |
 |---|---|
-| Default | `[22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23]` |
+| Default | `[22, 2222, 21, 53, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23]` |
 | Type | `number[]` (loaded as a `Set`) |
 | Scope | `PASSIVE_PORTS` — first dispatch check at the top of `scanTCPPort()` |
 
@@ -369,6 +361,7 @@ log — a reliable scanner fingerprint.
 |---|---|
 | 22, 2222 | SSH |
 | 21 | FTP |
+| 53 | DNS |
 | 110, 995 | POP3, POP3S |
 | 143, 993 | IMAP, IMAPS |
 | 3306 | MySQL |

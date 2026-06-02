@@ -31,29 +31,33 @@ await scanTCPPort(host, port);
 
 ---
 
-## randomPrivateIP()
+## randomDecoyIP(dstIP)
 
 **Purpose:**
-Generates a random IP address within one of the three RFC 1918 private ranges. Used exclusively as
-the spoofed source address in decoy SYN packets. Private addresses are chosen because they are
-non-routable on the public internet (no one can actually receive a reply to them) and because they
-look like traffic originating from inside the target's own network, which is more disorienting to a
-defender than an obviously external IP.
+Returns a source IP to use as the spoofed address in a decoy SYN packet. Prefers IPs drawn from
+the live scan target pool (the same address range as the real targets) so decoy traffic blends with
+the expected source distribution. Falls back to a random host in the destination's /24 when the
+pool is empty or contains only the destination itself.
 
-**Parameters:** none
+**Parameters:**
+- `dstIP` `{string}` — destination IP being probed; excluded from the pool to prevent a decoy
+  from using the same address as the real target
 
-**Returns:** `{string}` — dotted-decimal IP string, e.g. `"10.42.7.183"`
+**Returns:** `{string}` — dotted-decimal IP string, e.g. `"37.27.7.131"`
 
 **Notes:**
-- The last octet is constrained to `1–253` (`1 + rand(253)`) to avoid the `.0` network address and
-  `.255` broadcast address.
-- The three ranges covered: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`. Each is selected with
-  equal (1-in-3) probability regardless of range size.
+- When `decoyPool` has more than one entry, a random element is selected with a do-while retry
+  loop that discards any element equal to `dstIP`. This is O(1) space and terminates in at most
+  two iterations in practice.
+- The fallback /24 selection similarly avoids the exact host octet of `dstIP` via a do-while loop.
+- `decoyPool` is populated from the full target list at startup, so decoy IPs are always
+  plausible neighbors of the real scan targets.
 
 **Example:**
 ```js
-const fakeSource = randomPrivateIP();
-// => "192.168.14.201"
+const fakeSource = randomDecoyIP("37.27.7.154");
+// => "37.27.7.131"  (from target pool)
+// => "37.27.7.88"   (fallback /24, if pool has only one entry)
 ```
 
 ---
@@ -97,7 +101,7 @@ This packet is handed directly to the raw socket and sent without kernel TCP sta
 which is what allows the source IP to be anything we choose.
 
 **Parameters:**
-- `srcIP`   `{string}` — spoofed source IP in dotted-decimal, e.g. `"192.168.1.5"` (typically from `randomPrivateIP()`)
+- `srcIP`   `{string}` — spoofed source IP in dotted-decimal, e.g. `"37.27.7.131"` (typically from `randomDecoyIP()`)
 - `dstIP`   `{string}` — real destination IP in dotted-decimal
 - `srcPort` `{number}` — source port number written into the TCP header (1024–65535)
 - `dstPort` `{number}` — destination port number for the SYN
@@ -153,8 +157,8 @@ is unavailable or the process does not have the required privileges.
 
 **Purpose:**
 Sends `DECOY_COUNT` spoofed TCP SYN packets to the target immediately before the real probe.
-Each decoy has a different random private source IP, making it look like multiple hosts (potentially
-inside the target's own network) are all connecting at the same time.
+Each decoy uses a source IP from `randomDecoyIP`, drawn from the scan target pool or the
+destination's /24, making it look like multiple neighbor hosts are connecting at the same time.
 
 **Parameters:**
 - `dstIP`   `{string}` — resolved destination IP in dotted-decimal
@@ -164,8 +168,7 @@ inside the target's own network) are all connecting at the same time.
 
 **Notes:**
 - Decoys are fired-and-forgotten; the `send` callback is a no-op. We do not wait for
-  acknowledgement because decoy SYNs will never be acknowledged (the spoofed source IPs cannot
-  receive packets).
+  acknowledgement because the spoofed source addresses cannot receive a reply.
 - If `getDecoySocket()` returns null the function returns immediately without error, so TCP scanning
   continues unaffected even without root privileges.
 - Only called for TCP probes. UDP decoys are not implemented because UDP does not do handshakes,
@@ -254,7 +257,7 @@ in the service log and be a scanner fingerprint.
 - The socket is destroyed immediately on the first `data` event. Waiting for the full `close` event
   to resolve the promise means the returned string is always the complete first chunk received.
 - Ports dispatched here are defined in `PASSIVE_PORTS` (`passiveBannerPorts` in `settings.json`).
-  This set currently includes: 22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23.
+  This set currently includes: 22, 2222, 21, 53, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23.
 
 **Example:**
 ```js
@@ -320,8 +323,6 @@ service sends back, or null if the connection could not be established.
 - The `error` event only resolves the promise with `null` when `connected` is false. If an error
   fires after connect (e.g. mid-transfer RST) the `close` event resolves it instead with whatever
   data arrived — partial responses are still useful.
-- This function retains a dead `useTLS` parameter from an earlier version; it is always called with
-  `false` and the TLS path has been superseded by `tryTLSConnect`.
 
 **Example:**
 ```js
@@ -452,9 +453,10 @@ everything else.
 - `headers` — fingerprinting headers from `parseHeaders`, or `null` when no watched headers were present
 
 **Notes:**
-- **`PASSIVE_PORTS` dispatch:** ports like SSH (22/2222), FTP (21), POP3 (110/995), IMAP (143/993),
-  MySQL (3306), Redis (6379), Telnet (23) go to `probeBannerOnly`. An HTTP probe against these
-  services creates a protocol-mismatch error entry in the service log — a clear scanner fingerprint.
+- **`PASSIVE_PORTS` dispatch:** ports like SSH (22/2222), FTP (21), DNS (53), POP3 (110/995),
+  IMAP (143/993), MySQL (3306), Redis (6379), Telnet (23) go to `probeBannerOnly`. An HTTP probe
+  against these services creates a protocol-mismatch error entry in the service log — a clear
+  scanner fingerprint.
 - **`SMTP_PORTS` dispatch:** ports 25 and 587 go to `probeSMTP`, which performs the minimum
   valid EHLO exchange to get capability data without triggering SMTP error logging.
 - **TLS-first fallback:** all other ports attempt TLS first. If the handshake fails, plain TCP
@@ -1479,10 +1481,11 @@ node src/report.js --help
 ```
 
 **Argument parsing:**
-- `process.argv[2]` (`scanFile`) — path to the scan JSON to render
-- `process.argv[3]` (`outFile`)  — (optional) output path; defaults to `scanFile` with `.json` replaced by `.html`
-- `--min-ports=N`               — (optional) integer threshold; hosts with fewer than N open ports are excluded from the report
-- `--help` / `-h`               — print usage and exit 0; exit 1 if `scanFile` is also absent
+- Positional args are extracted from `process.argv.slice(2)` after stripping all flag arguments
+  (`--slow`, `--min-ports=N`, etc.). The first positional arg is `scanFile`; the second (if present
+  and not a flag) is `outFile`. This means argument order relative to flags is flexible.
+- `--min-ports=N`  — (optional) integer threshold; hosts with fewer than N open ports are excluded
+- `--help` / `-h`  — print usage and exit 0; exit 1 if `scanFile` is also absent
 
 **Behaviour:**
 1. If `--help`, `-h`, or no `scanFile` argument is present, prints usage to stdout and exits.
@@ -1495,7 +1498,9 @@ node src/report.js --help
 6. Prints the absolute resolved output path to stdout.
 
 **Notes:**
-- `--min-ports` is parsed from the raw `args` array with `args.find(a => a.startsWith("--min-ports="))`, so it can appear in any position after the script name.
+- `--min-ports` and `--help`/`-h` are extracted by value from the raw args array. Positional
+  arguments (`scanFile`, `outFile`) are whatever remains after all flag-shaped args are removed,
+  regardless of where flags appear in the command line.
 - Omitting `--min-ports` (or setting N to 0) includes all hosts; no filtering step is run.
 - The process exits with code `1` when called with no arguments so that shell pipelines and
   scripts can detect a missing operand. `--help` with a valid `scanFile` exits with code `0`.
@@ -1566,9 +1571,9 @@ sorted by CVSS score descending.
 - `url`      `{string}` — direct link to the NVD entry
 
 **Notes:**
-- The NVD keyword query uses only the product name and version (the product name is taken from the
-  second segment of the CPE string). This is intentional — full CPE 2.3 match queries require an
-  API key and have stricter format requirements.
+- The query uses a CPE 2.3 match string built from the `cpe` parameter and `version`, targeting
+  the NVD `cpeName` search endpoint. This is more precise than a keyword search and avoids
+  false-positive matches from unrelated products that share a common name.
 - CVSS v3.1 metrics are preferred; the function falls back to CVSS v2 if v3.1 data is absent.
 - Network errors and JSON parse failures both resolve to an empty array rather than rejecting, so
   a single unreachable NVD endpoint does not abort the entire scan.

@@ -302,13 +302,17 @@ file in place. A fully-processed entry looks like this:
 
 ## How Decoy Mode Works
 
-Before each real TCP probe, the scanner fires `4` spoofed SYN packets from random private IP addresses (RFC1918). Each packet is 60 bytes (20-byte IP header + 40-byte TCP header with options: MSS, SACK permitted, Timestamps, NOP, Window Scale) — indistinguishable from a real Linux SYN. The target logs see:
+Before each real TCP probe, the scanner fires `4` spoofed SYN packets. Source IPs are drawn from
+the scan target pool (same address range as the real targets), falling back to random hosts in the
+destination's /24 when the pool is too small. Each packet is 60 bytes (20-byte IP header + 40-byte
+TCP header with options: MSS, SACK permitted, Timestamps, NOP, Window Scale) — indistinguishable
+from a real Linux SYN. The target logs see:
 
 ```
-10.45.23.11   → target:port   (decoy)
-192.168.4.77  → target:port   (decoy)
-172.16.88.3   → target:port   (decoy)
-10.201.7.44   → target:port   (decoy)
+37.27.7.131   → target:port   (decoy)
+37.27.7.140   → target:port   (decoy)
+37.27.7.129   → target:port   (decoy)
+37.27.7.138   → target:port   (decoy)
 YOUR_REAL_IP  → target:port   (real)
 ```
 

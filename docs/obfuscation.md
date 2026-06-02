@@ -100,14 +100,14 @@ to dismiss as a single scanning source.
 > **TCP header reference:** [Description of TCP features — Microsoft Learn](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/description-tcp-features)
 
 
-**Implementation:** `randomPrivateIP()`, `buildSynPacket()`, `getDecoySocket()`, `sendDecoys()` —
+**Implementation:** `randomDecoyIP()`, `buildSynPacket()`, `getDecoySocket()`, `sendDecoys()` —
 together these fire `DECOY_COUNT` spoofed TCP SYN packets per real probe.
 
 **What it does:**
 Before each real TCP probe, the scanner sends `DECOY_COUNT` (4) raw IP/TCP packets at the target
 port. Each packet has:
-- A source IP randomly drawn from RFC 1918 private address space (`10.x.x.x`, `172.16-31.x.x`,
-  `192.168.x.x`)
+- A source IP drawn from `randomDecoyIP()`: preferentially from the scan target pool (same
+  address range as the real targets), falling back to a random host in the destination's /24
 - A randomised IP ID, TTL (64–127), and TCP sequence number
 - A randomised TCP window size
 - TCP options matching the Linux kernel default SYN fingerprint: MSS(1460), SACK permitted,
@@ -128,11 +128,13 @@ identify which one is the real probe. Alert queues fill with entries for interna
 exist or did not actually send the packet. Correlation rules that trigger on "N SYNs from one
 source" must set N high enough to avoid all these false sources, making them much less sensitive.
 
-Private IPs are chosen specifically because:
-1. They make the decoys look like internal traffic, which is often less scrutinised than external.
-2. A private IP can never actually receive a SYN-ACK reply, so it cannot accidentally complete a
-   TCP handshake with the target.
-3. Defenders chasing the alert would be looking for an internal host that does not exist.
+Decoy IPs from the target pool are chosen specifically because:
+1. They look like traffic from neighbor hosts in the same scanned range — plausible, not obviously
+   spoofed private-space addresses.
+2. If the pool has only one entry, the /24 fallback still keeps decoys visually consistent with
+   the target's subnet.
+3. Defenders chasing alerts from the decoy IPs are directed at real (or adjacent) addresses in the
+   target range, not at an obviously non-routable RFC 1918 address.
 
 **How the raw packet is built:**
 
@@ -172,22 +174,22 @@ Byte offset   Field                  Value
 ```
 Time    Src IP           Dst IP         Src Port  Dst Port  Flags
 ────────────────────────────────────────────────────────────────────
-T+0ms   192.168.14.201   10.10.10.5     54102     80        SYN   ← decoy
-T+0ms   10.7.231.99      10.10.10.5     18442     80        SYN   ← decoy
-T+0ms   172.22.44.7      10.10.10.5     61007     80        SYN   ← decoy
-T+0ms   192.168.200.3    10.10.10.5     37815     80        SYN   ← decoy
-T+0ms   <real scanner>   10.10.10.5     29043     80        SYN   ← real probe
+T+0ms   37.27.7.131      37.27.7.154    54102     80        SYN   ← decoy (from target pool)
+T+0ms   37.27.7.129      37.27.7.154    18442     80        SYN   ← decoy (from target pool)
+T+0ms   37.27.7.140      37.27.7.154    61007     80        SYN   ← decoy (from target pool)
+T+0ms   37.27.7.138      37.27.7.154    37815     80        SYN   ← decoy (from target pool)
+T+0ms   <real scanner>   37.27.7.154    29043     80        SYN   ← real probe
 ```
 
-The real scanner's IP is buried in the noise of four apparent internal connections.
+The real scanner's IP is buried in the noise of four connections from addresses in the same
+scanned range.
 
 **Gotchas:**
 - Requires the `raw-socket` npm package and root privileges. If either is absent, `sendDecoys`
   silently skips without affecting the TCP scan.
-- RFC 1918 private IPs are non-routable over the internet. In a LAN environment the target could
-  theoretically receive a SYN-ACK from one of these if the matching private IP actually exists on
-  the network. This is unlikely given the random generation, but a defender doing deep packet
-  inspection and ARP correlation could distinguish real from spoofed.
+- Decoy IPs are drawn from the real target pool, so they may correspond to hosts that actually
+  exist. A SYN-ACK from the target could reach one of these hosts if it is live on the network.
+  A defender doing deep packet inspection and ARP correlation could distinguish real from spoofed.
 - `IP_HDRINCL` behaviour varies slightly between Linux kernel versions. On some setups the kernel
   may still override the source IP or checksum — test in your environment.
 
@@ -202,9 +204,9 @@ The real scanner's IP is buried in the noise of four apparent internal connectio
 Instead of a single TLS skip-list, `scanTCPPort` now dispatches each port to the most appropriate
 probe strategy:
 
-- **`PASSIVE_PORTS`** (SSH 22/2222, FTP 21, POP3 110/995, IMAP 143/993, MySQL 3306, PostgreSQL 5432,
-  Redis 6379, MongoDB 27017, Telnet 23): `probeBannerOnly` — opens a TCP connection and reads
-  whatever the service sends on connect, without writing anything.
+- **`PASSIVE_PORTS`** (SSH 22/2222, FTP 21, DNS 53, POP3 110/995, IMAP 143/993, MySQL 3306,
+  PostgreSQL 5432, Redis 6379, MongoDB 27017, Telnet 23): `probeBannerOnly` — opens a TCP
+  connection and reads whatever the service sends on connect, without writing anything.
 - **`SMTP_PORTS`** (25, 587): `probeSMTP` — waits for the `220` greeting then sends `EHLO mail.example.com`
   to elicit the capability list.
 - **All other ports**: TLS-first strategy unchanged (`tryTLSConnect` → `tryTCPConnect` fallback).
