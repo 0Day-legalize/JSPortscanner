@@ -30,8 +30,14 @@ const REFERERS   = cfg.referers;
 const LANGUAGES  = cfg.acceptLanguages;
 const COOKIES    = cfg.fakeCookies;
 
-const REUSE_REQUESTS  = cfg.connectionReuseRequests;
-const FRAGMENT_DECOYS = cfg.fragmentDecoys;
+const REUSE_REQUESTS   = cfg.connectionReuseRequests;
+const FRAGMENT_DECOYS  = cfg.fragmentDecoys;
+const PASSIVE_PORTS    = new Set(cfg.passiveBannerPorts);
+const SMTP_PORTS       = new Set(cfg.smtpPorts);
+const SLOW_J_MIN       = cfg.slowJitterMinMs;
+const SLOW_J_MAX       = cfg.slowJitterMaxMs;
+const SLOW_MAX_HOST    = cfg.slowMaxHostWorkers;
+const SLOW_MAX_TCP     = cfg.slowMaxTCPConnections;
 
 const randomUA       = () => UA_LIST[rand(UA_LIST.length)];
 const randomPath     = () => HTTP_PATHS[rand(HTTP_PATHS.length)];
@@ -87,15 +93,16 @@ function checksum(buf) {
 }
 
 function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
-    // 40 bytes total: 20 IP header + 20 TCP header, no payload
-    const pkt = Buffer.alloc(40);
+    // 60 bytes: 20 IP header + 20 TCP header + 20 TCP options
+    // TCP options make the packet indistinguishable from a real Linux SYN
+    const pkt = Buffer.alloc(60);
     const src = srcIP.split(".").map(Number);
     const dst = dstIP.split(".").map(Number);
 
     // ── IP header (bytes 0–19) ──────────────────────────────────────
     pkt[0] = 0x45;                        // version=4, IHL=5 (20 byte header)
     pkt[1] = 0x00;                        // DSCP/ECN — default, no QoS
-    pkt.writeUInt16BE(40, 2);             // total packet length (IP + TCP)
+    pkt.writeUInt16BE(60, 2);             // total length: 20 IP + 20 TCP + 20 options
     pkt.writeUInt16BE(rand(0xffff), 4);   // random ID — avoids fingerprinting
     pkt.writeUInt16BE(0x4000, 6);         // DF flag set, fragment offset=0
     pkt[8] = 64 + rand(64);              // TTL randomised 64–127 — breaks OS detection
@@ -110,20 +117,33 @@ function buildSynPacket(srcIP, dstIP, srcPort, dstPort) {
     pkt.writeUInt16BE(dstPort, 22);                    // destination port
     pkt.writeUInt32BE(rand(0xffffffff) >>> 0, 24);     // random sequence number
     pkt.writeUInt32BE(0, 28);                          // ack=0 (SYN has no ack)
-    pkt[32] = 0x50;                                    // data offset=5 (20 byte header)
+    pkt[32] = 0xA0;                                    // data offset=10 (40 byte header with options)
     pkt[33] = 0x02;                                    // flags: SYN only
     pkt.writeUInt16BE(rand(0xffff) | 0x1000, 34);      // random window size
     pkt.writeUInt16BE(0, 36);                          // checksum placeholder (filled below)
     pkt.writeUInt16BE(0, 38);                          // urgent pointer=0
 
+    // ── TCP options (bytes 40–59) — matches real Linux SYN fingerprint ──
+    // MSS (kind=2, len=4): 1460 = standard Ethernet MTU
+    pkt[40] = 0x02; pkt[41] = 0x04; pkt.writeUInt16BE(1460, 42);
+    // SACK permitted (kind=4, len=2)
+    pkt[44] = 0x04; pkt[45] = 0x02;
+    // Timestamps (kind=8, len=10): random TSval, TSecr=0
+    pkt[46] = 0x08; pkt[47] = 0x0a;
+    pkt.writeUInt32BE(rand(0xffffffff) >>> 0, 48);     // TSval — random
+    pkt.writeUInt32BE(0, 52);                          // TSecr=0 (no previous timestamp)
+    // NOP (kind=1) for alignment
+    pkt[56] = 0x01;
+    // Window scale (kind=3, len=3): scale=7 matches Ubuntu/Debian default
+    pkt[57] = 0x03; pkt[58] = 0x03; pkt[59] = 0x07;
+
     // ── TCP checksum — requires pseudo header (RFC 793) ────────────
-    // Pseudo header = src IP + dst IP + zero byte + protocol + TCP length
-    // It is not sent on the wire — only used for checksum calculation
+    const tcpLen = 40; // TCP header (20) + options (20)
     const pseudo = Buffer.alloc(12);
     pseudo[0]=src[0]; pseudo[1]=src[1]; pseudo[2]=src[2]; pseudo[3]=src[3];
     pseudo[4]=dst[0]; pseudo[5]=dst[1]; pseudo[6]=dst[2]; pseudo[7]=dst[3];
-    pseudo[8]=0; pseudo[9]=6;            // zero byte + protocol=TCP
-    pseudo.writeUInt16BE(20, 10);        // TCP segment length (header only, no payload)
+    pseudo[8]=0; pseudo[9]=6;
+    pseudo.writeUInt16BE(tcpLen, 10);
     pkt.writeUInt16BE(checksum(Buffer.concat([pseudo, pkt.slice(20)])), 36);
 
     return pkt;
@@ -151,33 +171,34 @@ function getDecoySocket() {
  * @returns {[Buffer, Buffer]} Two IP fragment buffers
  */
 function fragmentPacket(full) {
+    // split the 40-byte TCP section (header+options) into two fragments of 16 + 24 bytes
     const id  = rand(0xffff);
     const ttl = full[8];
     const src = full.slice(12, 16);
     const dst = full.slice(16, 20);
 
-    // fragment 1: IP header + first 8 bytes of TCP (MF flag set, offset=0)
-    const f1 = Buffer.alloc(28);
+    // fragment 1: IP header + first 16 bytes of TCP+options (MF=1, offset=0)
+    const f1 = Buffer.alloc(36); // 20 IP + 16 TCP
     f1[0] = 0x45; f1[1] = 0x00;
-    f1.writeUInt16BE(28, 2);
+    f1.writeUInt16BE(36, 2);
     f1.writeUInt16BE(id, 4);
-    f1.writeUInt16BE(0x2000, 6);        // MF=1, offset=0
+    f1.writeUInt16BE(0x2000, 6);         // MF=1, offset=0
     f1[8] = ttl; f1[9] = 6;
     f1.writeUInt16BE(0, 10);
     src.copy(f1, 12); dst.copy(f1, 16);
-    full.copy(f1, 20, 20, 28);          // first 8 TCP bytes
+    full.copy(f1, 20, 20, 36);           // first 16 TCP bytes
     f1.writeUInt16BE(checksum(f1.slice(0, 20)), 10);
 
-    // fragment 2: IP header + last 12 bytes of TCP (MF=0, offset=1 meaning 8 bytes)
-    const f2 = Buffer.alloc(32);
+    // fragment 2: IP header + last 24 bytes of TCP+options (MF=0, offset=2 meaning 16 bytes)
+    const f2 = Buffer.alloc(44); // 20 IP + 24 TCP
     f2[0] = 0x45; f2[1] = 0x00;
-    f2.writeUInt16BE(32, 2);
+    f2.writeUInt16BE(44, 2);
     f2.writeUInt16BE(id, 4);
-    f2.writeUInt16BE(0x0001, 6);        // MF=0, offset=1 (=8 bytes)
+    f2.writeUInt16BE(0x0002, 6);         // MF=0, offset=2 (=16 bytes)
     f2[8] = ttl; f2[9] = 6;
     f2.writeUInt16BE(0, 10);
     src.copy(f2, 12); dst.copy(f2, 16);
-    full.copy(f2, 20, 28, 40);          // last 12 TCP bytes
+    full.copy(f2, 20, 36, 60);           // last 24 TCP bytes
     f2.writeUInt16BE(checksum(f2.slice(0, 20)), 10);
 
     return [f1, f2];
@@ -197,6 +218,51 @@ function sendDecoys(dstIP, dstPort) {
             sock.send(pkt, 0, pkt.length, dstIP, () => {});
         }
     }
+}
+
+// --- ʕ•ᴥ•ʔ service-appropriate probes ʕ•ᴥ•ʔ ---
+
+// Services that send a banner immediately on connect — just read passively
+// Sending HTTP to SSH/FTP/SMTP is a scanner fingerprint
+function probeBannerOnly(host, port) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host, port });
+        let data = "";
+
+        socket.setTimeout(TIMEOUT);
+        socket.on("data",    (chunk) => { data += chunk.toString("utf8"); socket.destroy(); });
+        socket.on("timeout", ()      => socket.destroy());
+        socket.on("error",   ()      => resolve(null));
+        socket.on("close",   ()      => resolve(data.trim() || null));
+    });
+}
+
+// SMTP requires a greeting exchange — send EHLO to get capability list
+function probeSMTP(host, port) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host, port });
+        let data = "";
+        let greeted = false;
+
+        socket.setTimeout(TIMEOUT);
+
+        socket.on("data", (chunk) => {
+            data += chunk.toString("utf8");
+            // wait for the 220 greeting then send EHLO
+            if (!greeted && data.includes("220")) {
+                greeted = true;
+                socket.write("EHLO mail.example.com\r\n");
+            }
+            // got the EHLO response — done
+            if (greeted && (data.includes("250 ") || data.includes("250-"))) {
+                socket.destroy();
+            }
+        });
+
+        socket.on("timeout", () => socket.destroy());
+        socket.on("error",   () => resolve(null));
+        socket.on("close",   () => resolve(data.trim() || null));
+    });
 }
 
 // --- ʕ•ᴥ•ʔ port scanning + banner grabbing ʕ•ᴥ•ʔ ---
@@ -307,11 +373,18 @@ function tryTLSConnect(host, port, hostname) {
 }
 
 async function scanTCPPort(host, port, hostname = host) {
-    if (PLAIN.has(port)) {
-        const res = await tryTCPConnect(host, port, false, hostname);
+    // service-specific probes — avoids sending HTTP to non-HTTP services
+    if (PASSIVE_PORTS.has(port)) {
+        const res = await probeBannerOnly(host, port);
         return { proto: "TCP", port, data: res, cert: null, headers: null };
     }
 
+    if (SMTP_PORTS.has(port)) {
+        const res = await probeSMTP(host, port);
+        return { proto: "SMTP", port, data: res, cert: null, headers: null };
+    }
+
+    // for everything else try TLS first then plain TCP with HTTP banner grab
     const tlsRes = await tryTLSConnect(host, port, hostname);
     if (tlsRes !== null) {
         const headers = tlsRes.data ? parseHeaders(tlsRes.data) : null;
@@ -395,19 +468,23 @@ async function scanHost(host, firstPort, lastPort, onProgress) {
         openPorts.push({ port, proto, entry });
     }
 
+    const jMin = slowMode ? SLOW_J_MIN : J_MIN;
+    const jMax = slowMode ? SLOW_J_MAX : J_MAX;
+    const maxTCP = slowMode ? SLOW_MAX_TCP : MAX_TCP;
+
     const tcpTasks = portList.map((port) => async () => {
-        await jitter(J_MIN, J_MAX);
+        await jitter(jMin, jMax);
         if (resolvedIP) sendDecoys(resolvedIP, port);
         return scanTCPPort(host, port, hostname);
     });
 
     const udpTasks = portList.map((port) => async () => {
-        await jitter(J_MIN, J_MAX);
+        await jitter(jMin, jMax);
         return scanUDPPort(host, port);
     });
 
     await Promise.all([
-        runPool(tcpTasks, MAX_TCP, onResult),
+        runPool(tcpTasks, maxTCP, onResult),
         runPool(udpTasks, MAX_UDP, onResult),
     ]);
 
@@ -456,7 +533,13 @@ if (process.getuid() !== 0) {
     process.exit(1);
 }
 
-const [targetFile, firstPortArg, lastPortArg, outputFile] = process.argv.slice(2);
+const rawArgs    = process.argv.slice(2);
+const slowMode   = rawArgs.includes("--slow");
+const cleanArgs  = rawArgs.filter(a => a !== "--slow");
+
+const [targetFile, firstPortArg, lastPortArg, outputFile] = cleanArgs;
+
+if (slowMode) console.log("slow mode enabled — jitter 5–60s, 5 concurrent hosts\n");
 
 if (!targetFile || !firstPortArg || !lastPortArg) {
     console.error("usage: sudo node src/scanner.js <target> <start-port> <end-port> [output.json]");
@@ -522,6 +605,6 @@ process.on("SIGINT", () => {
     process.exit(0);
 });
 
-await runPool(tasks, MAX_HOST, () => {});
+await runPool(tasks, slowMode ? SLOW_MAX_HOST : MAX_HOST, () => {});
 
 console.log(`\nsaved to ${path.resolve(outputPath)}`);

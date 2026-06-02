@@ -38,7 +38,13 @@
       "consent=1; _fbp=fb.1.1700000000.123456789"
     ],
     "connectionReuseRequests": 2,
-    "fragmentDecoys": true
+    "fragmentDecoys": true,
+    "slowJitterMinMs": 5000,
+    "slowJitterMaxMs": 60000,
+    "slowMaxHostWorkers": 5,
+    "slowMaxTCPConnections": 10,
+    "passiveBannerPorts": [22, 2222, 21, 110, 995, 143, 993, 3306, 5432, 6379, 27017, 23],
+    "smtpPorts": [25, 587]
   },
   "honeypot": {
     "suspiciousPortThreshold": 6,
