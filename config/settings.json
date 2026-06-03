@@ -38,6 +38,7 @@
     ],
     "connectionReuseRequests": 1,
     "fragmentDecoys": true,
+    "maxBannerBytes": 4096,
     "outboundProbeHost": "8.8.8.8",
     "outboundProbePort": 53,
     "slowJitterMinMs": 5000,

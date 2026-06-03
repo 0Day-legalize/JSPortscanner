@@ -31,6 +31,7 @@ const COOKIES    = cfg.fakeCookies;
 
 const REUSE_REQUESTS      = cfg.connectionReuseRequests;
 const FRAGMENT_DECOYS     = cfg.fragmentDecoys;
+const MAX_BANNER_BYTES    = cfg.maxBannerBytes;
 const OUTBOUND_PROBE_HOST = cfg.outboundProbeHost;
 const OUTBOUND_PROBE_PORT = cfg.outboundProbePort;
 const PASSIVE_PORTS    = new Set(cfg.passiveBannerPorts);
@@ -375,6 +376,7 @@ function probeSMTP(host, port, useTLS = false) {
 
         socket.on("data", (chunk) => {
             data += chunk.toString("utf8");
+            if (data.length > MAX_BANNER_BYTES) { socket.destroy(); return; }
             // SMTP opens with a 220 greeting — only after that can we send EHLO
             if (!greeted && data.includes("220")) {
                 greeted = true;
@@ -411,7 +413,10 @@ function tryTCPConnect(host, port, hostname) {
             socket.write(payload);
         });
 
-        socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });
+        socket.on("data", (chunk) => {
+            data += chunk.toString("utf8");
+            if (data.length > MAX_BANNER_BYTES) socket.destroy();
+        });
         socket.on("timeout", ()      => socket.destroy());
         socket.on("error",   ()      => { if (!connected) resolve(null); });
         socket.on("close",   ()      => resolve(connected ? data : null));
@@ -488,7 +493,10 @@ function tryTLSConnect(host, port, hostname) {
             socket.write(payload);
         });
 
-        socket.on("data",    (chunk) => { data += chunk.toString("utf8"); });
+        socket.on("data", (chunk) => {
+            data += chunk.toString("utf8");
+            if (data.length > MAX_BANNER_BYTES) socket.destroy();
+        });
         socket.on("timeout", ()      => socket.destroy());
         socket.on("error",   ()      => resolve(null));
         socket.on("close",   ()      => resolve(data ? { data, cert } : null));
