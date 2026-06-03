@@ -696,7 +696,7 @@ console.log(`
   ██████╔╝██║  ██║██████╔╝╚██████╔╝███████╗██║  ██║
   ╚═════╝ ╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
 
-  non-tor tunneling version
+  @ direct-route edition — no tor tunneling
 
   quick start:
     1. sudo node src/scanner.js    config/targets.txt 1 1025   # required
