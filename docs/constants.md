@@ -572,6 +572,40 @@ Fully sequential TCP probing per host — one port at a time with full jitter be
 
 ---
 
+### maxBannerBytes
+
+| Property | Value |
+|---|---|
+| Default | `4096` |
+| Type | `number` (integer) |
+| Scope | `tryTCPConnect`, `tryTLSConnect`, `probeSMTP` — checked on every `data` event |
+
+**What it controls:**
+Maximum number of bytes accumulated from a single service response before the socket is destroyed.
+When the accumulated `data` string exceeds this value the socket is immediately destroyed, which
+triggers the `close` event and resolves the probe with whatever was collected so far.
+
+**Why it exists:**
+Without a cap, a service that streams data indefinitely (e.g. a custom TCP echo server or a misbehaving
+daemon) would hold a worker slot open until the socket timeout, blocking other probes. 4 096 bytes is
+more than sufficient to capture any useful HTTP response header, SSH banner, or SMTP capability
+listing.
+
+**Effect of increasing:**
+More response data is retained per probe. Useful if banners of interest are being truncated, though
+most service fingerprinting information appears in the first few hundred bytes.
+
+**Effect of decreasing:**
+More aggressive truncation. Very low values (below ~256 bytes) may cut off multi-line SMTP `EHLO`
+responses before the capability list is complete.
+
+**Note:**
+`probeBannerOnly` does not apply this cap — it destroys the socket immediately on the first `data`
+event regardless of size, so banner-only probes are already bounded by the size of the first TCP
+segment.
+
+---
+
 ## credtest section
 
 Controls credential-testing behaviour in `src/credtest.js`.

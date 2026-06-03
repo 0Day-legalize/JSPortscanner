@@ -27,7 +27,7 @@ A fast, stealthy TCP/UDP port scanner and credential tester written in Node.js w
 | PTR hostname | Reverse DNS lookup stored in `hostname` field when it differs from the IP |
 | WHOIS enrichment | Queries whois.ripe.net for each host and adds an `owner` field |
 | Honeypot detection | Flags Cowrie SSH/FTP banners, live SSH KEX fingerprinting, T-Pot port combos, Telnet, and bare SSH version strings |
-| Version detection | Parses banners, HTTP headers, and TLS certificate fields using 25 regex parsers to extract `{ service, vendor, version, os? }` for each open port and writes a `version` field into the scan JSON. Covers 27 services across SSH, HTTP, FTP, SMTP/IMAP/POP3, databases, OpenVPN, Telnet, and RDP |
+| Version detection | Parses banners, HTTP headers, and TLS certificate fields using 28 regex parsers to extract `{ service, vendor, version, os? }` for each open port and writes a `version` field into the scan JSON. Covers 27 vendors across SSH, HTTP, FTP, SMTP/IMAP/POP3, databases, OpenVPN, Telnet, and RDP |
 | CVE lookup | Parses software versions from banners and HTTP headers, queries the NVD API for matching CVEs, and writes results back into the scan JSON under a `cves` field per port. Supports 11 services; handles NVD rate limiting (5 req/30 s) |
 | Credential testing | Wordlist-based SSH, FTP, and HTTP/HTTPS login testing against scan results |
 | Geolocation | Queries ip-api.com batch endpoint for country, city, lat/lon, ISP, org, and AS per host; writes a `geo` field into the scan JSON. Handles rate limiting (100 IPs/batch, 4.5 s between batches). Falls back to home directory on EACCES |
@@ -134,9 +134,9 @@ node src/enrich.js scans/scan_1748476800000.json
 node src/versiondetect.js <scan.json>
 ```
 
-Parses service banners, HTTP response headers, and TLS certificate fields using 25 regex parsers
+Parses service banners, HTTP response headers, and TLS certificate fields using 28 regex parsers
 to extract structured `{ service, vendor, version, os? }` information for each open port. Results
-are written back into the scan JSON under a `version` field on each port entry. Covers 27 services:
+are written back into the scan JSON under a `version` field on each port entry. Covers 27 vendors:
 OpenSSH, Dropbear, nginx, Apache, lighttpd, IIS, Caddy, OpenResty, PHP, WordPress, ProFTPD,
 vsftpd, FileZilla, Pure-FTPd, Postfix, Exim, Sendmail, Dovecot (IMAP+POP3), Exchange, MySQL,
 MariaDB, PostgreSQL, Redis, MongoDB, OpenVPN, Telnet, and RDP.
@@ -390,7 +390,7 @@ PortScanner/
 │   ├── geolocate.js         Geolocation (ip-api.com batch, writes geo field per host)
 │   ├── enrich.js            WHOIS enrichment (adds owner field)
 │   ├── honeypot.js          Honeypot detector
-│   ├── versiondetect.js     Service version detector (25 regex parsers, writes version field per port)
+│   ├── versiondetect.js     Service version detector (28 regex parsers, writes version field per port)
 │   ├── vulnscan.js          CVE lookup (NVD API, writes cves field per port)
 │   ├── credtest.js          Credential tester
 │   ├── report.js            HTML report generator (Leaflet map when geo data present)

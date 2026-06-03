@@ -136,7 +136,7 @@ CLI arguments
 │     extractText()       │  joins banner + HTTP header values + cert CN/org
 │                         │  into a single string for regex matching
 │                         │
-│     detectVersion()     │  runs 25 parsers in specificity order;
+│     detectVersion()     │  runs 28 parsers in specificity order;
 │                         │  returns first match as
 │                         │  { service, vendor, version, os? }
 │                         │
@@ -333,7 +333,7 @@ PortScanner/
 │   ├── geolocate.js        Geolocation — ip-api.com batch lookup, writes geo field per host
 │   ├── enrich.js           WHOIS enrichment — adds owner field to each host entry
 │   ├── honeypot.js         Honeypot detector — flags suspected honeypots in scan results
-│   ├── versiondetect.js    Version detector — 25 regex parsers, writes version field per port
+│   ├── versiondetect.js    Version detector — 28 regex parsers, writes version field per port
 │   ├── vulnscan.js         CVE lookup — queries NVD API and writes cves field per port
 │   ├── credtest.js         Credential tester — runs after scanner produces output
 │   ├── report.js           HTML report generator — self-contained dark-themed report with Leaflet map

@@ -274,6 +274,9 @@ information.
   in multiple TCP segments.
 - The socket is destroyed as soon as a `250 ` or `250-` line is received — the first of those
   reliably indicates the EHLO reply is complete.
+- The accumulated `data` string is capped at `MAX_BANNER_BYTES` (4 096 bytes by default). When the
+  cap is exceeded the socket is destroyed early to prevent an unexpectedly verbose SMTP server from
+  holding a worker slot until the timeout.
 
 **Example:**
 ```js
@@ -312,6 +315,9 @@ service sends back, or null if the connection could not be established.
 - The `error` event only resolves the promise with `null` when `connected` is false. If an error
   fires after connect (e.g. mid-transfer RST) the `close` event resolves it instead with whatever
   data arrived — partial responses are still useful.
+- The accumulated `data` string is capped at `MAX_BANNER_BYTES` (4 096 bytes by default). When the
+  cap is reached the socket is destroyed immediately, preventing a streaming service from holding a
+  worker slot until the timeout expires.
 
 **Example:**
 ```js
@@ -411,6 +417,8 @@ certificate object, or null if the TLS handshake failed.
   even if the service closes the connection immediately after the handshake.
 - Returns `null` (not `{ data: "", cert }`) when the service sends no data, to signal a clean "port
   speaks TLS but gave no response" case to `scanTCPPort`.
+- The accumulated `data` string is capped at `MAX_BANNER_BYTES` (4 096 bytes by default). When the
+  cap is reached the socket is destroyed, preventing indefinite data accumulation.
 
 **Example:**
 ```js
@@ -1747,7 +1755,7 @@ appear in the file.
 ## PARSERS (constant)
 
 **Purpose:**
-Module-level array of 25 parser descriptors, each covering one vendor/service combination.
+Module-level array of 28 parser descriptors, each covering one vendor/service combination.
 `detectVersion` iterates this array in order and returns the result of the first matching entry,
 so more specific patterns must appear before broader ones that could match the same text.
 
@@ -1807,7 +1815,7 @@ extractText({ banner: "SSH-2.0-OpenSSH_9.3p1", headers: null, cert: null });
 ## detectVersion(portInfo)
 
 **Purpose:**
-Runs all 25 parsers from `PARSERS` against the text collected by `extractText` and returns the
+Runs all 28 parsers from `PARSERS` against the text collected by `extractText` and returns the
 first match as a structured object. Returns `null` when no parser matches or the port entry has
 no readable text.
 
