@@ -264,8 +264,8 @@ function buildHTML(scanFile, data) {
 ${geoHosts.length > 0 ? `<div id="map"></div>
 <script>
   const map = L.map("map").setView([20, 10], 2);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors", maxZoom: 18
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "© OpenStreetMap contributors © CARTO", maxZoom: 19, subdomains: "abcd"
   }).addTo(map);
   ${mapMarkers}
 </script>` : ""}
