@@ -699,14 +699,14 @@ console.log(`
   non-tor tunneling version
 
   quick start:
-    1. sudo node src/scanner.js    config/targets.txt 1 1025
-    2. node src/geolocate.js       scans/scan_<timestamp>.json
-    3. node src/enrich.js          scans/scan_<timestamp>.json
-    4. node src/versiondetect.js   scans/scan_<timestamp>.json
-    5. node src/vulnscan.js        scans/scan_<timestamp>.json
-    6. node src/credtest.js        scans/scan_<timestamp>.json config/wordlist.txt
-    7. node src/honeypot.js        scans/scan_<timestamp>.json
-    8. node src/report.js          scans/scan_<timestamp>.json ~/report.html
+    1. sudo node src/scanner.js    config/targets.txt 1 1025   # required
+    2. node src/geolocate.js       scans/scan_<timestamp>.json  # optional
+    3. node src/enrich.js          scans/scan_<timestamp>.json  # optional
+    4. node src/versiondetect.js   scans/scan_<timestamp>.json  # optional
+    5. node src/vulnscan.js        scans/scan_<timestamp>.json  # optional — needs step 4
+    6. node src/credtest.js        scans/scan_<timestamp>.json config/wordlist.txt  # optional
+    7. node src/honeypot.js        scans/scan_<timestamp>.json  # optional — best after steps 4-6
+    8. node src/report.js          scans/scan_<timestamp>.json ~/report.html  # required
 
   flags: --slow  --syn  --udp  --help
 `);
