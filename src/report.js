@@ -1,3 +1,4 @@
+// created with Claude (https://claude.ai) — @claude
 import fs   from "node:fs";
 import path from "node:path";
 
