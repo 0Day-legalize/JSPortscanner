@@ -1,5 +1,8 @@
 # Installation
 
+> Made by **Sebastian Litzenberger** and **Jamie Heyckendorf**
+
+
 ## Requirements
 
 - Node.js 18+

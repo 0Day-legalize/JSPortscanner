@@ -410,6 +410,10 @@ PortScanner/
 
 ---
 
+## Authors
+
+Made by **Sebastian Litzenberger** and **Jamie Heyckendorf**
+
 ## License
 
 MIT — © Freazer26 + 0Day-legalize
