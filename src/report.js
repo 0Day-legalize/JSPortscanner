@@ -248,7 +248,7 @@ function buildHTML(scanFile, data) {
 
 <header>
   <div>
-    <h1>ʕ•ᴥ•ʔ RCN Scan Report</h1>
+    <h1>ʕ•ᴥ•ʔ Dangerous Badger — Scan Report</h1>
     <div class="file">${esc(scanFile)}</div>
   </div>
 </header>
@@ -272,6 +272,8 @@ ${geoHosts.length > 0 ? `<div id="map"></div>
 
 <div class="controls">
   <input type="text" id="search" placeholder="Filter by IP, banner, port, owner..." oninput="filterCards()">
+  <label>Min ports <input type="number" id="minPorts" min="0" value="0" style="width:55px;padding:4px 6px" oninput="filterCards()"></label>
+  <label>Max ports <input type="number" id="maxPorts" min="0" value="9999" style="width:55px;padding:4px 6px" oninput="filterCards()"></label>
   <label><input type="checkbox" id="honeypotOnly" onchange="filterCards()"> Honeypots only</label>
   <label><input type="checkbox" id="credsOnly" onchange="filterCards()"> With credentials only</label>
 </div>
@@ -285,17 +287,21 @@ function filterCards() {
     const q            = document.getElementById("search").value.toLowerCase();
     const honeypotOnly = document.getElementById("honeypotOnly").checked;
     const credsOnly    = document.getElementById("credsOnly").checked;
+    const minPorts     = Number(document.getElementById("minPorts").value) || 0;
+    const maxPorts     = Number(document.getElementById("maxPorts").value) || 9999;
 
     document.querySelectorAll(".card").forEach(card => {
         const text        = card.textContent.toLowerCase();
         const isHoneypot  = card.classList.contains("honeypot");
         const hasCreds    = card.querySelector(".creds") !== null;
+        const portCount   = card.querySelectorAll(".port-table tbody tr").length;
 
         const matchSearch   = !q || text.includes(q);
         const matchHoneypot = !honeypotOnly || isHoneypot;
         const matchCreds    = !credsOnly    || hasCreds;
+        const matchPorts    = portCount >= minPorts && portCount <= maxPorts;
 
-        card.classList.toggle("hidden", !(matchSearch && matchHoneypot && matchCreds));
+        card.classList.toggle("hidden", !(matchSearch && matchHoneypot && matchCreds && matchPorts));
     });
 }
 </script>
