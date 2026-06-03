@@ -113,7 +113,7 @@ function hostCard(entry) {
     ].filter(Boolean).join(" ").toLowerCase();
 
     return `
-    <div class="card ${isHoneypot ? "honeypot" : ""}" data-ports="${portCount}" data-search="${esc(searchText)}">
+    <div class="card ${isHoneypot ? "honeypot" : ""}" data-ports="${portCount}" data-search="${esc(searchText)}" data-creds="${creds ? "1" : "0"}">
         <div class="card-header">
             <div class="host-info">
                 <span class="host">${esc(entry.host)}</span>
@@ -298,6 +298,10 @@ ${cards}
 </div>
 
 <script>
+// cache card NodeList and total count once — both are static after page load
+const ALL_CARDS  = document.querySelectorAll(".card");
+const CARD_TOTAL = ALL_CARDS.length;
+
 function filterCards() {
     const q            = document.getElementById("search").value.toLowerCase();
     const honeypotOnly = document.getElementById("honeypotOnly").checked;
@@ -306,22 +310,20 @@ function filterCards() {
     const maxPorts     = Number(document.getElementById("maxPorts").value) || 9999;
 
     let visible = 0;
-    document.querySelectorAll(".card").forEach(card => {
-        // use pre-computed data attributes — avoids slow textContent/querySelectorAll reads
-        const matchSearch   = !q || card.dataset.search.includes(q);
+    ALL_CARDS.forEach(card => {
+        const ds  = card.dataset;
+        const matchSearch   = !q            || ds.search.includes(q);
         const matchHoneypot = !honeypotOnly || card.classList.contains("honeypot");
-        const matchCreds    = !credsOnly    || card.querySelector(".creds") !== null;
-        const portCount     = Number(card.dataset.ports);
-        const matchPorts    = portCount >= minPorts && portCount <= maxPorts;
+        const matchCreds    = !credsOnly    || ds.creds === "1";
+        const matchPorts    = Number(ds.ports) >= minPorts && Number(ds.ports) <= maxPorts;
 
         const show = matchSearch && matchHoneypot && matchCreds && matchPorts;
         card.classList.toggle("hidden", !show);
         if (show) visible++;
     });
 
-    const total = document.querySelectorAll(".card").length;
     document.getElementById("resultCount").textContent =
-        visible === total ? total + " hosts" : visible + " / " + total + " hosts";
+        visible === CARD_TOTAL ? CARD_TOTAL + " hosts" : visible + " / " + CARD_TOTAL + " hosts";
 }
 </script>
 </body>
