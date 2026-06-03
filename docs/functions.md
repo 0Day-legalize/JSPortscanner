@@ -1539,6 +1539,25 @@ All functions below are defined in `src/report.js`. They are listed in the order
 
 ---
 
+## SEV_COLOR (constant)
+
+**Purpose:**
+Maps CVE severity level strings to their badge background colours used inside `portRow`.
+
+**Type:** `{object}` — `{ CRITICAL: string, HIGH: string, MEDIUM: string, LOW: string }`
+
+---
+
+## PROTO_CLASS (constant)
+
+**Purpose:**
+Maps protocol label strings to their CSS class names applied to the protocol badge `<span>` in
+`portRow`. Protocols absent from the map fall back to `"proto-tcp"`.
+
+**Type:** `{object}` — `{ TLS: string, SYN: string, SMTP: string, SMTPS: string, UDP: string }`
+
+---
+
 ## esc(s)
 
 **Purpose:**
@@ -1587,9 +1606,10 @@ than rendered as empty cells.
 **Returns:** `{string}` — HTML `<tr>` element
 
 **Notes:**
-- Protocol colours are hard-coded per protocol name: green for TLS, orange for SYN, purple for
-  SMTP, blue for everything else. This makes the most security-relevant protocols visually distinct
-  at a glance.
+- Protocol colours are driven by the module-level `PROTO_CLASS` map, which resolves each `proto`
+  string to a CSS class (`proto-tls`, `proto-syn`, `proto-smtp`, `proto-smtps`, `proto-udp`,
+  `proto-tcp`). The badge `<span>` receives that class rather than an inline `style` attribute, so
+  colour changes only require a CSS edit.
 - When a `version` field is present, vendor and version are rendered in muted grey text immediately
   after the protocol badge (e.g. `[TLS] nginx 1.24.0`). This surfaces `versiondetect.js` results
   inline without adding a separate column to the port table.
@@ -1622,6 +1642,13 @@ credential results block.
 **Returns:** `{string}` — HTML `<div class="card">` element; gets class `honeypot` when suspected
 
 **Notes:**
+- Three `data-*` attributes are pre-computed at render time and written into the root `<div>`:
+  - `data-ports`  — integer count of open ports, used by the min/max port filter
+  - `data-search` — single lowercased space-joined string covering the host IP, hostname, owner,
+    city, country, and every port number, proto, and banner; used by `filterCards()` for text matching
+    without touching the DOM on keypress
+  - `data-creds`  — `"1"` when `entry.credentials` is a populated object, `"0"` otherwise; replaces
+    the previous `querySelector(".creds")` DOM query inside the filter
 - Honeypot reason strings are joined with `<br>` and displayed in a full-width warning strip
   immediately below the card header, using a red border and dark red background to draw attention.
 - CVE data is rendered inside each port row via `portRow()`, not at the card level.
@@ -1654,8 +1681,13 @@ The resulting string can be written directly to a `.html` file with no further p
   found), or green (clean). Each marker popup shows the IP, city/country, ISP, and open port list.
   Markers are generated from the subset of entries where `h.geo.lat != null`.
 - The `filterCards()` function, embedded in a `<script>` block, performs real-time DOM filtering
-  by matching the search input against each card's full `textContent`. This covers IPs, banners,
-  ports, hostnames, owner names, and CVE IDs without indexing.
+  with zero DOM queries on keypress. `ALL_CARDS` (a `NodeList`) and `CARD_TOTAL` (its length) are
+  cached as `const` declarations at page load. On each filter event, `filterCards` reads
+  `card.dataset.search` for text matching, `card.dataset.ports` for the port-count range check, and
+  `card.dataset.creds === "1"` for the credentials-only checkbox — all dataset reads against the
+  already-live NodeList with no additional `querySelector` calls.
+- A result count is rendered into `<span id="resultCount">` after every filter pass. When all cards
+  are visible it shows `N hosts`; when filtered it shows `visible / total hosts`.
 - Summary stats computed: total hosts with open ports, total open ports, suspected honeypots,
   hosts with credentials, and total CVE count across all ports. The CVE count is a nested reduce
   over `port.cves[].cves[]` and is shown in orange in the stats bar.

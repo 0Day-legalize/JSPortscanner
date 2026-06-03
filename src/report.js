@@ -3,7 +3,8 @@ import path from "node:path";
 
 // --- ʕ•ᴥ•ʔ helpers ʕ•ᴥ•ʔ ---
 
-const SEV_COLOR = { CRITICAL: "#f44336", HIGH: "#ff9800", MEDIUM: "#ffeb3b", LOW: "#4caf50" };
+const SEV_COLOR   = { CRITICAL: "#f44336", HIGH: "#ff9800", MEDIUM: "#ffeb3b", LOW: "#4caf50" };
+const PROTO_CLASS = { TLS: "proto-tls", SYN: "proto-syn", SMTP: "proto-smtp", SMTPS: "proto-smtps", UDP: "proto-udp" };
 
 /**
  * HTML-escapes a value for safe inline insertion into HTML attributes and text content.
@@ -44,7 +45,6 @@ function portRow(port, info) {
     const cves    = info.cves    || null;
     const ver     = info.version || null;
 
-    const PROTO_CLASS = { TLS: "proto-tls", SYN: "proto-syn", SMTP: "proto-smtp", SMTPS: "proto-smtps", UDP: "proto-udp" };
     const protoClass = PROTO_CLASS[proto] || "proto-tcp";
 
     let certHtml = "";
