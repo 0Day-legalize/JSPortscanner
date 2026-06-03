@@ -3,6 +3,8 @@ import path from "node:path";
 
 // --- ʕ•ᴥ•ʔ helpers ʕ•ᴥ•ʔ ---
 
+const SEV_COLOR = { CRITICAL: "#f44336", HIGH: "#ff9800", MEDIUM: "#ffeb3b", LOW: "#4caf50" };
+
 /**
  * HTML-escapes a value for safe inline insertion into HTML attributes and text content.
  *
@@ -42,7 +44,8 @@ function portRow(port, info) {
     const cves    = info.cves    || null;
     const ver     = info.version || null;
 
-    const protoColor = proto === "TLS" ? "#4caf50" : proto === "SYN" ? "#ff9800" : proto === "SMTP" ? "#9c27b0" : "#2196f3";
+    const PROTO_CLASS = { TLS: "proto-tls", SYN: "proto-syn", SMTP: "proto-smtp", SMTPS: "proto-smtps", UDP: "proto-udp" };
+    const protoClass = PROTO_CLASS[proto] || "proto-tcp";
 
     let certHtml = "";
     if (cert) {
@@ -65,14 +68,13 @@ function portRow(port, info) {
 
     let cvesHtml = "";
     if (cves) {
-        const sevColor = (s) => ({ CRITICAL: "#f44336", HIGH: "#ff9800", MEDIUM: "#ffeb3b", LOW: "#4caf50" })[s] || "#8b949e";
         cvesHtml = cves.map(sw => `
             <div class="cve-block">
                 <div class="cve-software">${esc(sw.software)}</div>
                 ${sw.cves.map(c => `
                 <div class="cve-entry">
                     <a href="${esc(c.url)}" target="_blank" class="cve-id">${esc(c.id)}</a>
-                    ${c.severity ? `<span class="badge" style="background:${sevColor(c.severity)};color:#000">${esc(c.severity)}</span>` : ""}
+                    ${c.severity ? `<span class="badge" style="background:${SEV_COLOR[c.severity] ?? "#8b949e"};color:#000">${esc(c.severity)}</span>` : ""}
                     ${c.score ? `<span class="cve-score">${c.score}</span>` : ""}
                     <span class="cve-summary">${esc(c.summary)}</span>
                 </div>`).join("")}
@@ -82,7 +84,7 @@ function portRow(port, info) {
     return `
         <tr>
             <td>${esc(port)}</td>
-            <td>${badge(proto, protoColor)}${ver ? ` <span style="font-size:11px;color:#8b949e">${esc(ver.vendor)}${ver.version ? " " + esc(ver.version) : ""}</span>` : ""}</td>
+            <td><span class="badge ${protoClass}">${esc(proto)}</span>${ver ? ` <span class="ver">${esc(ver.vendor)}${ver.version ? " " + esc(ver.version) : ""}</span>` : ""}</td>
             <td class="banner">${esc(banner)}</td>
             <td>${certHtml}${hdrsHtml}${cvesHtml}</td>
         </tr>`;
@@ -105,8 +107,13 @@ function hostCard(entry) {
 
     const portRows = Object.entries(entry.ports || {}).map(([p, info]) => portRow(p, info)).join("");
 
+    const searchText = [
+        entry.host, entry.hostname, owner, geo?.city, geo?.country,
+        ...Object.entries(entry.ports || {}).flatMap(([p, v]) => [p, v?.proto, v?.banner])
+    ].filter(Boolean).join(" ").toLowerCase();
+
     return `
-    <div class="card ${isHoneypot ? "honeypot" : ""}">
+    <div class="card ${isHoneypot ? "honeypot" : ""}" data-ports="${portCount}" data-search="${esc(searchText)}">
         <div class="card-header">
             <div class="host-info">
                 <span class="host">${esc(entry.host)}</span>
@@ -223,6 +230,13 @@ function buildHTML(scanFile, data) {
   .headers b { color: #c9d1d9; }
 
   .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; color: #fff; }
+  .proto-tls   { background: #4caf50; }
+  .proto-syn   { background: #ff9800; }
+  .proto-smtp  { background: #9c27b0; }
+  .proto-smtps { background: #7b1fa2; }
+  .proto-udp   { background: #607d8b; }
+  .proto-tcp   { background: #2196f3; }
+  .ver { font-size: 11px; color: #8b949e; }
 
   .creds { padding: 10px 16px; background: #0d1b0d; border-top: 1px solid #238636; font-size: 12px; }
   .creds b { color: #3fb950; }
@@ -276,6 +290,7 @@ ${geoHosts.length > 0 ? `<div id="map"></div>
   <label>Max ports <input type="number" id="maxPorts" min="0" value="9999" style="width:55px;padding:4px 6px" oninput="filterCards()"></label>
   <label><input type="checkbox" id="honeypotOnly" onchange="filterCards()"> Honeypots only</label>
   <label><input type="checkbox" id="credsOnly" onchange="filterCards()"> With credentials only</label>
+  <span id="resultCount" style="margin-left:auto;color:#8b949e;font-size:12px"></span>
 </div>
 
 <div class="cards" id="cards">
@@ -290,19 +305,23 @@ function filterCards() {
     const minPorts     = Number(document.getElementById("minPorts").value) || 0;
     const maxPorts     = Number(document.getElementById("maxPorts").value) || 9999;
 
+    let visible = 0;
     document.querySelectorAll(".card").forEach(card => {
-        const text        = card.textContent.toLowerCase();
-        const isHoneypot  = card.classList.contains("honeypot");
-        const hasCreds    = card.querySelector(".creds") !== null;
-        const portCount   = card.querySelectorAll(".port-table tbody tr").length;
-
-        const matchSearch   = !q || text.includes(q);
-        const matchHoneypot = !honeypotOnly || isHoneypot;
-        const matchCreds    = !credsOnly    || hasCreds;
+        // use pre-computed data attributes — avoids slow textContent/querySelectorAll reads
+        const matchSearch   = !q || card.dataset.search.includes(q);
+        const matchHoneypot = !honeypotOnly || card.classList.contains("honeypot");
+        const matchCreds    = !credsOnly    || card.querySelector(".creds") !== null;
+        const portCount     = Number(card.dataset.ports);
         const matchPorts    = portCount >= minPorts && portCount <= maxPorts;
 
-        card.classList.toggle("hidden", !(matchSearch && matchHoneypot && matchCreds && matchPorts));
+        const show = matchSearch && matchHoneypot && matchCreds && matchPorts;
+        card.classList.toggle("hidden", !show);
+        if (show) visible++;
     });
+
+    const total = document.querySelectorAll(".card").length;
+    document.getElementById("resultCount").textContent =
+        visible === total ? total + " hosts" : visible + " / " + total + " hosts";
 }
 </script>
 </body>
