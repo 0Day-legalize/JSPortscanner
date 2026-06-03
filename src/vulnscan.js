@@ -1,3 +1,4 @@
+// code reviewed with Claude (https://claude.ai) + SonarQube — @claude
 import fs   from "node:fs";
 import path from "node:path";
 import https from "node:https";

@@ -1,3 +1,4 @@
+// code reviewed with Claude (https://claude.ai) + SonarQube — @claude
 import net               from "node:net";
 import tls               from "node:tls";
 import dgram             from "node:dgram";

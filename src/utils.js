@@ -1,3 +1,4 @@
+// code reviewed with Claude (https://claude.ai) + SonarQube — @claude
 // shared helpers used by scanner.js and credtest.js
 
 export function jitter(min, max) {
