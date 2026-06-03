@@ -1,3 +1,4 @@
+// partially created with Claude (https://claude.ai) — @claude
 import fs  from "node:fs";
 import net from "node:net";
 
